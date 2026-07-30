@@ -10,19 +10,29 @@
 const ALLOWED_TAGS = new Set([
   'A', 'ABBR', 'B', 'BLOCKQUOTE', 'BR', 'CODE', 'DD', 'DIV', 'DL', 'DT', 'EM',
   'FIGCAPTION', 'FIGURE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HR', 'I', 'IMG',
-  'LI', 'OL', 'P', 'PRE', 'S', 'SMALL', 'SPAN', 'STRIKE', 'STRONG', 'SUB',
-  'SUP', 'TABLE', 'TBODY', 'TD', 'TFOOT', 'TH', 'THEAD', 'TR', 'U', 'UL',
+  'LI', 'OL', 'P', 'PICTURE', 'PRE', 'S', 'SMALL', 'SOURCE', 'SPAN', 'STRIKE',
+  'STRONG', 'SUB', 'SUP', 'TABLE', 'TBODY', 'TD', 'TFOOT', 'TH', 'THEAD', 'TR',
+  'U', 'UL',
+  // Steam serves the short looping clips in store descriptions — what reads
+  // as a GIF on the real page — as muted <video>. Dropping VIDEO silently
+  // deleted most of the animation from every game page.
+  'VIDEO',
 ]);
 
 /** Tags whose entire subtree must go, not just the element itself. */
-const DROP_SUBTREE = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'FORM', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'MATH', 'LINK', 'META', 'BASE', 'AUDIO', 'VIDEO', 'CANVAS']);
+const DROP_SUBTREE = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'FORM', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'MATH', 'LINK', 'META', 'BASE', 'AUDIO', 'CANVAS']);
 
 const ALLOWED_ATTRS = {
   A: ['href', 'title'],
   IMG: ['src', 'alt', 'title', 'width', 'height'],
+  VIDEO: ['src', 'poster', 'width', 'height'],
+  SOURCE: ['src', 'type'],
   TD: ['colspan', 'rowspan'],
   TH: ['colspan', 'rowspan'],
 };
+
+/** Only these media types may be referenced by a <source>. */
+const SAFE_SOURCE_TYPE = /^(video|image)\/[a-z0-9.+-]+$/i;
 
 const SAFE_LINK = /^(https?:|mailto:)/i;
 
@@ -91,11 +101,35 @@ function sanitizeNode(node, out, doc) {
         }
         continue;
       }
+      if (attr === 'poster') {
+        const poster = safeUrl(value, { requireHttp: true });
+        if (poster) clean.setAttribute('poster', poster);
+        continue;
+      }
+      if (attr === 'type') {
+        if (SAFE_SOURCE_TYPE.test(value)) clean.setAttribute('type', value);
+        continue;
+      }
       if (['width', 'height', 'colspan', 'rowspan'].includes(attr)) {
         if (/^\d{1,4}$/.test(value)) clean.setAttribute(attr, value);
         continue;
       }
       clean.setAttribute(attr, value);
+    }
+
+    // Set the playback flags ourselves rather than trusting the markup: these
+    // clips stand in for GIFs, so they autoplay muted and loop, and can never
+    // make noise or grab focus.
+    if (tag === 'VIDEO') {
+      clean.muted = true;
+      clean.defaultMuted = true;
+      clean.loop = true;
+      clean.autoplay = true;
+      clean.controls = false;
+      for (const [flag, flagValue] of [['muted', ''], ['loop', ''], ['autoplay', ''], ['playsinline', ''], ['preload', 'metadata']]) {
+        clean.setAttribute(flag, flagValue);
+      }
+      clean.classList.add('bb_video');
     }
 
     // An <img> that lost its src is just noise.
@@ -124,5 +158,18 @@ export function sanitizeFragment(html) {
 /** Replace `target`'s children with the sanitised rendering of `html`. */
 export function renderRichText(target, html) {
   target.replaceChildren(sanitizeFragment(html));
+
+  for (const video of target.querySelectorAll('video')) {
+    // A clip that lost every source would render as a black rectangle.
+    if (!video.getAttribute('src') && video.querySelectorAll('source[src]').length === 0) {
+      video.remove();
+      continue;
+    }
+    // Some browsers only honour muted autoplay once the node is in the DOM.
+    video.play?.().catch(() => {
+      /* a clip that will not autoplay is not worth reporting */
+    });
+  }
+
   return target;
 }

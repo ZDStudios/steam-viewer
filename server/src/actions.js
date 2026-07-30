@@ -98,6 +98,10 @@ export const ACTIONS = {
       const details = await steam.getAppDetails({ appid: id, cc, l });
       const game = steam.toFull(details);
 
+      // Verify trailer URLs here rather than letting the browser discover a
+      // dead CDN host mid-playback. Cached with the rest of the page.
+      game.movies = await steam.resolveMovies(game.movies).catch(() => game.movies);
+
       const [reviews, news] = await Promise.all([
         steam.getReviews({ appid: id, filter: 'all', numPerPage: 10 }).catch(() => null),
         steam.getNews({ appid: id, count: 5 }).catch(() => []),
@@ -249,9 +253,13 @@ export const ACTIONS = {
   },
 
   /**
-   * Profile + owned games. Uses the Web API when a key is configured, and
-   * otherwise falls back to the public community XML, so looking someone up
-   * never requires the visitor — or the relay — to be signed in.
+   * Everything the real Steam profile page shows: identity, level, recent
+   * activity with achievement progress, the full library, and the friends
+   * list with live status.
+   *
+   * Uses the Web API when a key is configured and the public community
+   * documents otherwise, so looking someone up never requires the visitor —
+   * or the relay — to be signed in.
    */
   profile: {
     ttl: TTL.profile,
@@ -261,44 +269,79 @@ export const ACTIONS = {
       const cc = clampCc(p.cc);
       const l = clampLang(p.l);
 
-      if (steam.hasApiKey()) {
-        try {
-          return await steam.getProfile({ id, cc, l });
-        } catch (error) {
-          // A key that cannot see this profile is no reason to give up.
-          if (error?.status !== 404 && error?.status !== 403) throw error;
-        }
-      }
+      // Community XML is the source of identity either way: it is the only
+      // place the summary, real name and "hours past 2 weeks" line live.
+      const community$ = community.getCommunityProfile(id);
+      const api$ = steam.hasApiKey() ? steam.getProfile({ id, cc, l }).catch(() => null) : Promise.resolve(null);
+      const [profile, api] = await Promise.all([community$, api$.catch(() => null)]);
 
-      const profile = await community.getCommunityProfile(id);
-      const library = await community.getCommunityGames(profile.steamid).catch((error) => ({
-        games: [],
-        error: error.message,
-      }));
+      const steamid = profile.steamid;
+
+      const library = api?.games?.length
+        ? { games: api.games }
+        : await community.getCommunityGames(steamid).catch((error) => ({ games: [], error: error.message }));
+
+      // Recent activity: the API's two-week list is authoritative, the XML's
+      // "most played" block is the key-less stand-in.
+      const recent = (api?.recent?.length ? api.recent : profile.mostPlayed).slice(0, 6);
+
+      const friends$ = steam.hasApiKey()
+        ? steam.getFriends({ steamid }).then((result) => (result.available ? result : community.getCommunityFriends(steamid)))
+        : community.getCommunityFriends(steamid);
+
+      // Achievement bars for the recent games, in parallel with the friends.
+      const achievements$ = Promise.all(
+        recent.slice(0, 4).map(async (game) => {
+          const viaApi = steam.hasApiKey() ? await steam.getPlayerAchievements({ steamid, appid: game.appid }).catch(() => null) : null;
+          const result = viaApi || (await community.getCommunityAchievements(steamid, game.appid).catch(() => null));
+          return [game.appid, result];
+        }),
+      );
+
+      const [friends, achievementPairs] = await Promise.all([
+        friends$.catch(() => ({ friends: [], total: 0, available: false })),
+        achievements$.catch(() => []),
+      ]);
+
+      const achievements = new Map(achievementPairs.filter(([, value]) => value));
+      const games = library.games || [];
 
       return {
-        steamid: profile.steamid,
+        steamid,
         profile: {
           name: profile.name,
+          realname: profile.realname,
+          summary: profile.summary,
+          headline: profile.headline,
           avatar: profile.avatar,
           profileUrl: profile.profileUrl,
-          state: null,
-          visible: profile.isPublic,
+          customUrl: profile.customUrl,
           country: profile.location,
-          createdAt: null,
           memberSince: profile.memberSince,
-          playingName: profile.playingName,
-          summary: profile.summary,
-          realname: profile.realname,
+          createdAt: api?.profile?.createdAt || null,
+          onlineState: profile.onlineState,
+          stateMessage: profile.stateMessage,
+          playingName: profile.playingName || api?.profile?.playingName || null,
+          playingAppId: profile.playingAppId || api?.profile?.playingAppId || null,
+          visible: profile.isPublic,
+          vacBanned: profile.vacBanned,
+          limitedAccount: profile.limitedAccount,
         },
-        level: null,
-        gameCount: library.games.length,
-        games: library.games,
-        recent: library.games.filter((game) => game.playtime2Weeks > 0).slice(0, 12),
+        level: api?.level ?? null,
+        hours2Weeks: profile.hours2Weeks ?? null,
+        gameCount: api?.gameCount ?? games.length,
+        groupCount: profile.groupCount || 0,
+        games,
+        recent: recent.map((game) => ({ ...game, achievements: achievements.get(game.appid) || null })),
+        friends: friends.friends || [],
+        friendCount: friends.total || 0,
+        friendsAvailable: Boolean(friends.available),
         libraryError: library.error || null,
+        inventoryUrl: `https://steamcommunity.com/profiles/${steamid}/inventory/`,
+        badgesUrl: `https://steamcommunity.com/profiles/${steamid}/badges/`,
         cc,
         l,
-        source: 'community',
+        source: api ? 'webapi+community' : 'community',
       };
     },
   },

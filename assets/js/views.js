@@ -478,8 +478,9 @@ export async function appView(root, ctx, appid) {
       .map((movie) => ({
         kind: 'video',
         thumb: movie.thumb,
-        // Ordered by preference; mountPlayer falls through on error.
-        sources: [movie.mp4, movie.mp4Low, movie.webm].filter(Boolean),
+        // The relay has already probed these and put a responding CDN host
+        // first; mountPlayer still falls through the rest on error.
+        sources: (movie.sources || [movie.mp4]).filter(Boolean),
         poster: movie.thumb,
         label: movie.name || 'Trailer',
       }))
@@ -807,34 +808,124 @@ async function loadLibrary(root, ctx, who) {
 
   const profile = data.profile || {};
   const totalMinutes = data.games.reduce((sum, game) => sum + (game.playtimeForever || 0), 0);
+  const online = profile.playingName ? 'in-game' : /online|away|busy|snooze|looking/i.test(profile.onlineState || '') ? 'online' : 'offline';
 
-  root.innerHTML = `
-    <div class="profilecard">
-      ${profile.avatar ? `<img src="${escAttr(profile.avatar)}" alt="" referrerpolicy="no-referrer" />` : ''}
-      <div>
-        <div class="profilecard__name">${esc(profile.name || data.steamid)}</div>
-        <div class="profilecard__meta">
-          ${profile.playingName ? `Currently playing ${esc(profile.playingName)}` : profile.country ? esc(profile.country) : 'Steam profile'}
-          ${profile.profileUrl ? ` · <a href="${escAttr(profile.profileUrl)}" target="_blank" rel="noopener noreferrer">Community profile</a>` : ''}
+  const statusLine = profile.playingName
+    ? `Currently playing <a href="#/app/${profile.playingAppId || ''}">${esc(profile.playingName)}</a>`
+    : esc(profile.stateMessage || (online === 'online' ? 'Online' : 'Offline'));
+
+  /* One activity row per recently played game, with its achievement bar. */
+  const activityRow = (game) => {
+    const ach = game.achievements;
+    const percent = ach?.total ? Math.round((ach.unlocked / ach.total) * 100) : 0;
+
+    return `<article class="activity">
+      <a class="activity__art" href="#/app/${game.appid}">
+        <img src="${escAttr(game.header)}" data-fallback="${escAttr([game.capsule, game.portrait].filter(Boolean).join('|'))}"
+             alt="${escAttr(game.name)}" loading="lazy" decoding="async" />
+      </a>
+      <div class="activity__body">
+        <a class="activity__name" href="#/app/${game.appid}">${esc(game.name)}</a>
+        <div class="activity__hours">
+          <span>${esc(formatPlaytime(game.playtimeForever))} on record</span>
+          ${game.playtime2Weeks ? `<span>${esc(formatPlaytime(game.playtime2Weeks))} past 2 weeks</span>` : ''}
+          ${game.lastPlayed ? `<span>last played ${esc(formatDate(game.lastPlayed))}</span>` : ''}
         </div>
       </div>
-      <div class="profilecard__stats">
-        <div class="profilecard__stat"><b>${formatNumber(data.gameCount || data.games.length)}</b><span>Games</span></div>
-        <div class="profilecard__stat"><b>${Math.round(totalMinutes / 60).toLocaleString()}</b><span>Hours</span></div>
-        ${data.level !== null && data.level !== undefined ? `<div class="profilecard__stat"><b>${esc(data.level)}</b><span>Level</span></div>` : ''}
-      </div>
-    </div>
+      ${
+        ach
+          ? `<div class="activity__ach">
+               <span class="activity__achlabel">Achievement Progress <b>${formatNumber(ach.unlocked)} of ${formatNumber(ach.total)}</b></span>
+               <span class="activity__bar"><span style="width:${percent}%"></span></span>
+               <span class="activity__icons">
+                 ${(ach.icons || []).map((icon) => `<img src="${escAttr(icon.icon)}" alt="" title="${escAttr(icon.name || '')}" loading="lazy" />`).join('')}
+               </span>
+             </div>`
+          : ''
+      }
+    </article>`;
+  };
 
-    ${
-      data.recent?.length
-        ? sectionHtml({
-            title: 'Recent Games',
-            note: 'last two weeks',
-            layout: 'portrait',
-            body: data.recent.map((game) => portraitCardHtml(game, { subtitle: formatPlaytime(game.playtime2Weeks || game.playtimeForever) })).join(''),
-          })
-        : ''
-    }
+  const friendRow = (friend) => `<a class="friend friend--${esc(friend.state)}" href="#/library/${encodeURIComponent(friend.steamid)}">
+      <img src="${escAttr(friend.avatar || '')}" alt="" loading="lazy" />
+      <span>
+        <span class="friend__name">${esc(friend.name)}</span>
+        <span class="friend__state">${esc(friend.status || friend.state)}</span>
+      </span>
+    </a>`;
+
+  root.innerHTML = `
+    <div class="breadcrumbs"><a href="#/library">Profiles</a> &rsaquo; ${esc(profile.name || data.steamid)}</div>
+
+    <header class="phead">
+      <img class="phead__avatar phead__avatar--${esc(online)}" src="${escAttr(profile.avatar || '')}"
+           alt="${escAttr(profile.name || '')}" />
+      <div class="phead__id">
+        <h1 class="phead__name">${esc(profile.name || data.steamid)}</h1>
+        ${profile.realname ? `<div class="phead__real">${esc(profile.realname)}</div>` : ''}
+        ${profile.country ? `<div class="phead__real">${esc(profile.country)}</div>` : ''}
+        ${profile.summary ? `<p class="phead__summary">${esc(profile.summary)}</p>` : ''}
+        ${profile.vacBanned ? '<p class="phead__ban">VAC ban on record</p>' : ''}
+      </div>
+      <div class="phead__side">
+        ${
+          data.level !== null && data.level !== undefined
+            ? `<div class="phead__level">Level <span>${esc(data.level)}</span></div>`
+            : ''
+        }
+        <div class="phead__actions">
+          <a class="btn btn--ghost btn--sm" href="${escAttr(profile.profileUrl)}" target="_blank" rel="noopener noreferrer">View on Steam</a>
+          <a class="btn btn--ghost btn--sm" href="${escAttr(data.inventoryUrl)}" target="_blank" rel="noopener noreferrer">Inventory</a>
+        </div>
+      </div>
+    </header>
+
+    <div class="players">
+      <div class="players__main">
+        <section class="panel">
+          <div class="panel__head">
+            <h2>Recent Activity</h2>
+            <span>${data.hours2Weeks !== null && data.hours2Weeks !== undefined ? `${esc(data.hours2Weeks)} hours past 2 weeks` : ''}</span>
+          </div>
+          <div class="panel__body">
+            ${
+              data.recent?.length
+                ? data.recent.map(activityRow).join('')
+                : '<p class="loading-note">No games played in the last two weeks.</p>'
+            }
+          </div>
+        </section>
+      </div>
+
+      <aside class="players__side">
+        <section class="panel">
+          <div class="panel__head"><h2 class="panel__status panel__status--${esc(online)}">${
+            online === 'offline' ? 'Currently Offline' : online === 'in-game' ? 'Currently In-Game' : 'Currently Online'
+          }</h2></div>
+          <div class="panel__body">
+            <p class="pstat">${statusLine}</p>
+            <a class="pstat pstat--link" href="#library-all">Games <b>${formatNumber(data.gameCount || data.games.length)}</b></a>
+            <a class="pstat pstat--link" href="${escAttr(data.inventoryUrl)}" target="_blank" rel="noopener noreferrer">Inventory</a>
+            <a class="pstat pstat--link" href="${escAttr(data.badgesUrl)}" target="_blank" rel="noopener noreferrer">Badges</a>
+            ${data.groupCount ? `<span class="pstat">Groups <b>${formatNumber(data.groupCount)}</b></span>` : ''}
+            ${profile.memberSince ? `<span class="pstat">Member since <b>${esc(profile.memberSince)}</b></span>` : ''}
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__head"><h2>Friends ${data.friendCount ? `<b>${formatNumber(data.friendCount)}</b>` : ''}</h2></div>
+          <div class="panel__body">
+            ${
+              data.friends?.length
+                ? data.friends.slice(0, 24).map(friendRow).join('')
+                : `<p class="loading-note">${
+                    data.friendsAvailable ? 'No friends to show.' : "This profile's friends list is private or unavailable."
+                  }</p>`
+            }
+          </div>
+        </section>
+      </aside>
+    </div>
 
     ${
       data.libraryError
@@ -848,7 +939,7 @@ async function loadLibrary(root, ctx, who) {
            </section>`
     }
 
-    <section class="section">
+    <section class="section" id="library-all">
       <div class="section__head">
         <h2 class="section__title">All Games<small id="library-count">${formatNumber(data.games.length)} owned</small></h2>
       </div>

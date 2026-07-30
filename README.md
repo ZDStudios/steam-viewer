@@ -138,7 +138,7 @@ query string, which is what the page falls back to when the socket cannot connec
 | `mostplayed` | `cc`, `l`, `limit` | Live most-played chart, enriched with store data |
 | `genre` | `genre`, `cc`, `l` | Genre landing page sections |
 | `news` | `appid`, `count` | Announcements for an app |
-| `profile` | `id` (SteamID64, vanity name or profile URL) | Player summary + owned games — Web API if a key is set, otherwise community XML |
+| `profile` | `id` (SteamID64, vanity name or profile URL) | Identity, level, recent activity with achievement bars, friends, full library — Web API if a key is set, community XML otherwise |
 | `genres`, `capabilities`, `ping` | — | Metadata |
 | `subscribe` / `unsubscribe` | `appid` | Start/stop live player-count pushes (WebSocket only) |
 
@@ -175,6 +175,34 @@ client, and there is no web SDK for Steam Link. Instead the agent detects a
 
 The pairing code is the only credential — anyone holding it can list and launch games on that PC. It is regenerated
 on every start unless pinned with `--code`, and `--no-launch` runs the agent read-only.
+
+## Profile pages
+
+A profile shows what the real Steam profile shows: avatar with its status ring, persona and real name, summary,
+Recent Activity with hours on record and per-game achievement progress, the Currently Online panel with game and
+group counts, the friends list with live status, the full library, and the account-value calculator.
+
+Nobody signs in. Without an API key it is assembled from the public community documents —
+`/?xml=1` for identity and most-played, `/games/?tab=all&xml=1` for the library, `/stats/<appid>/?xml=1` for
+achievement progress, and the friends page for the sidebar. With `STEAM_API_KEY` set, the Web API supplies Steam
+level, a richer friends list and exact two-week playtime instead.
+
+A profile whose game details are private cannot be read either way — that is Steam's setting, not a limitation here.
+
+## Trailers and animated clips
+
+Two things had to be right for game media to play:
+
+- **No `crossorigin` on the player.** Steam's video CDN sends no `Access-Control-Allow-Origin`, so a CORS media
+  fetch can never succeed.
+- **A CDN host that still answers.** `appdetails` hands out URLs on hosts Valve has retired. The relay expands
+  every trailer into candidates across the known hosts (`video.cloudflare`, `video.fastly`, `video.akamai`, …),
+  probes them with a one-byte range request, and puts a working one first. Results are cached for six hours.
+
+Store descriptions embed their short looping clips as muted `<video>` — this is what reads as a GIF on the real
+store page. The sanitiser allows `<video>`/`<source>` from https origins and re-applies the playback flags itself
+(muted, looping, autoplaying, no controls), so the animation shows without the markup being able to add sound or
+grab focus.
 
 ## On SteamDB
 

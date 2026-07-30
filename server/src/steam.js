@@ -297,6 +297,81 @@ export function toLite(data) {
   };
 }
 
+/**
+ * Steam has moved its trailer CDN between Akamai, Cloudflare and Fastly, and
+ * `appdetails` still hands out URLs on hosts that no longer answer. Dropping
+ * the CORS attribute on the player was necessary but not sufficient: when the
+ * host in the URL is dead, every bitrate on that host is dead too.
+ *
+ * So each movie URL becomes a list of candidates across the known hosts.
+ */
+const VIDEO_HOSTS = [
+  'video.cloudflare.steamstatic.com',
+  'video.fastly.steamstatic.com',
+  'video.akamai.steamstatic.com',
+  'cdn.cloudflare.steamstatic.com',
+  'cdn.akamai.steamstatic.com',
+];
+
+export function videoCandidates(url) {
+  const secure = secureUrl(url);
+  if (!secure) return [];
+
+  let parsed;
+  try {
+    parsed = new URL(secure);
+  } catch {
+    return [secure];
+  }
+
+  // Keep the host Steam gave us first; it is right more often than not.
+  const hosts = [parsed.host, ...VIDEO_HOSTS.filter((host) => host !== parsed.host)];
+  return hosts.map((host) => {
+    const candidate = new URL(secure);
+    candidate.host = host;
+    return candidate.toString();
+  });
+}
+
+/** Does this URL actually serve bytes? Asks for a single byte. */
+async function urlWorks(url, timeoutMs = 7000) {
+  try {
+    const response = await limiter.run(() =>
+      fetch(url, {
+        method: 'GET',
+        headers: { 'User-Agent': USER_AGENT, Range: 'bytes=0-1', Accept: '*/*' },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(timeoutMs),
+      }),
+    );
+    // Drain so the connection can be reused instead of hanging around.
+    response.body?.cancel?.().catch(() => {});
+    return response.ok || response.status === 206;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Move a candidate that actually responds to the front of each movie's source
+ * list. Probing happens on the relay because the browser cannot inspect a
+ * cross-origin media failure — it only sees playback break.
+ */
+export async function resolveMovies(movies = [], { max = 3 } = {}) {
+  const probed = await mapPool(movies.slice(0, max), 2, async (movie) => {
+    const candidates = movie.sources || [];
+    for (const candidate of candidates.slice(0, 4)) {
+      const { value } = await cache.wrap(`vid:${candidate}`, 6 * 60 * 60_000, () => urlWorks(candidate));
+      if (value) {
+        return { ...movie, sources: [candidate, ...candidates.filter((url) => url !== candidate)], verified: true };
+      }
+    }
+    return { ...movie, verified: false };
+  });
+
+  return [...probed.filter(Boolean), ...movies.slice(max)];
+}
+
 /** The full game page payload. */
 export function toFull(data) {
   const lite = toLite(data);
@@ -331,15 +406,25 @@ export function toFull(data) {
       thumb: secureUrl(shot.path_thumbnail),
       full: secureUrl(shot.path_full),
     })),
-    movies: (data.movies || []).map((movie) => ({
-      id: movie.id,
-      name: movie.name,
-      thumb: secureUrl(movie.thumbnail),
-      highlight: Boolean(movie.highlight),
-      mp4: secureUrl(movie.mp4?.max || movie.mp4?.['480']),
-      mp4Low: secureUrl(movie.mp4?.['480']),
-      webm: secureUrl(movie.webm?.max || movie.webm?.['480']),
-    })),
+    movies: (data.movies || []).map((movie) => {
+      // Preference order: high-bitrate mp4, 480p mp4, then webm — each
+      // expanded across every CDN host Steam is known to serve trailers from.
+      const sources = [
+        ...videoCandidates(movie.mp4?.max),
+        ...videoCandidates(movie.mp4?.['480']),
+        ...videoCandidates(movie.webm?.max),
+        ...videoCandidates(movie.webm?.['480']),
+      ].filter((url, index, all) => url && all.indexOf(url) === index);
+
+      return {
+        id: movie.id,
+        name: movie.name,
+        thumb: secureUrl(movie.thumbnail),
+        highlight: Boolean(movie.highlight),
+        sources,
+        mp4: sources[0] || null,
+      };
+    }),
     supportInfo: {
       url: secureUrl(data.support_info?.url),
       email: data.support_info?.email || null,
@@ -770,6 +855,62 @@ export async function getProfile({ id, cc = 'us', l = 'english' } = {}) {
     recent: (recentRaw?.response?.games || []).map(toOwned),
     cc,
     l,
+  };
+}
+
+/** Friends with their personas resolved — Web API only. */
+export async function getFriends({ steamid, limit = 40 } = {}) {
+  if (!hasApiKey()) return { friends: [], total: 0, available: false };
+
+  const listRaw = await fetchJson(
+    `${WEBAPI}/ISteamUser/GetFriendList/v1/?${qs({ key: STEAM_API_KEY, steamid, relationship: 'friend' })}`,
+  ).catch(() => null);
+
+  const list = listRaw?.friendslist?.friends || [];
+  if (list.length === 0) return { friends: [], total: 0, available: false };
+
+  // GetPlayerSummaries takes up to 100 ids at a time.
+  const ids = list.slice(0, Math.min(limit, 100)).map((friend) => friend.steamid);
+  const summariesRaw = await fetchJson(
+    `${WEBAPI}/ISteamUser/GetPlayerSummaries/v2/?${qs({ key: STEAM_API_KEY, steamids: ids.join(',') })}`,
+  ).catch(() => null);
+
+  const STATES = ['offline', 'online', 'busy', 'away', 'snooze', 'looking to trade', 'looking to play'];
+  const since = new Map(list.map((friend) => [friend.steamid, friend.friend_since]));
+
+  const friends = (summariesRaw?.response?.players || []).map((player) => ({
+    steamid: player.steamid,
+    name: player.personaname,
+    avatar: secureUrl(player.avatarmedium || player.avatar),
+    state: player.gameid ? 'in-game' : player.personastate > 0 ? 'online' : 'offline',
+    status: player.gameextrainfo || STATES[player.personastate] || null,
+    profileUrl: secureUrl(player.profileurl),
+    friendSince: since.get(player.steamid) || null,
+  }));
+
+  // Online first, then in-game, then the rest alphabetically — like Steam.
+  const rank = { 'in-game': 0, online: 1, offline: 2 };
+  friends.sort((a, b) => (rank[a.state] - rank[b.state]) || a.name.localeCompare(b.name));
+
+  return { friends, total: list.length, available: true };
+}
+
+/** Achievement progress for one game — Web API only. */
+export async function getPlayerAchievements({ steamid, appid } = {}) {
+  if (!hasApiKey()) return null;
+
+  const raw = await fetchJson(
+    `${WEBAPI}/ISteamUserStats/GetPlayerAchievements/v1/?${qs({ key: STEAM_API_KEY, steamid, appid, l: 'english' })}`,
+  ).catch(() => null);
+
+  const list = raw?.playerstats?.achievements;
+  if (!Array.isArray(list) || list.length === 0) return null;
+
+  return {
+    appid: Number(appid),
+    total: list.length,
+    unlocked: list.filter((entry) => entry.achieved === 1).length,
+    icons: [],
   };
 }
 

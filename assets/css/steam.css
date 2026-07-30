@@ -1828,6 +1828,10 @@ a.chip:hover {
   line-height: 17px;
   text-align: center;
 }
+/* `display: inline-block` above out-specifies the UA rule for [hidden]. */
+.navcount[hidden] {
+  display: none;
+}
 
 /* ☆ overlay on a store card */
 .card__wish {
@@ -2056,5 +2060,308 @@ a.chip:hover {
   }
   .disco__shots {
     grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* =====================================================================
+   Player profile
+   ===================================================================== */
+
+.phead {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 18px;
+  margin-bottom: 18px;
+  border-radius: var(--radius);
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0.2) 60%, rgba(102, 192, 244, 0.08) 100%),
+    linear-gradient(180deg, #1b2838, #16202d);
+}
+.phead__avatar {
+  width: 112px;
+  height: 112px;
+  flex: none;
+  border-radius: 3px;
+  background: #000;
+  /* Steam frames the avatar in the player's current status colour. */
+  box-shadow: 0 0 0 2px #4c5153;
+}
+.phead__avatar--online {
+  box-shadow: 0 0 0 2px #57cbde;
+}
+.phead__avatar--in-game {
+  box-shadow: 0 0 0 2px #90ba3c;
+}
+.phead__id {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.phead__name {
+  font-size: 30px;
+  font-weight: 300;
+  line-height: 1.1;
+}
+.phead__real {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.phead__summary {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--text);
+  white-space: pre-wrap;
+  max-width: 60ch;
+}
+.phead__ban {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--negative);
+}
+.phead__side {
+  margin-left: auto;
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-end;
+}
+.phead__level {
+  font-size: 20px;
+  font-weight: 300;
+  color: var(--text);
+}
+.phead__level span {
+  display: inline-grid;
+  place-items: center;
+  min-width: 34px;
+  height: 34px;
+  margin-left: 6px;
+  padding: 0 8px;
+  border-radius: 50%;
+  border: 2px solid #6a5c98;
+  font-size: 15px;
+  color: #fff;
+}
+.phead__actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.players {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 18px;
+  align-items: start;
+  margin-bottom: 28px;
+}
+.players__main,
+.players__side {
+  min-width: 0;
+}
+.players__side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.panel {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.panel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.3);
+}
+.panel__head h2 {
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--blue);
+}
+.panel__head h2 b {
+  font-weight: 300;
+  color: var(--text);
+  margin-left: 4px;
+}
+.panel__head span {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.panel__status--offline {
+  color: var(--text-dim);
+}
+.panel__status--in-game {
+  color: #90ba3c;
+}
+.panel__body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Recent activity rows */
+.activity {
+  display: grid;
+  grid-template-columns: 184px minmax(0, 1fr);
+  gap: 14px;
+  padding: 12px;
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.25);
+}
+.activity__art img {
+  width: 100%;
+  aspect-ratio: 460 / 215;
+  object-fit: cover;
+  border-radius: 2px;
+  background: linear-gradient(135deg, #2a475e, #10161f);
+}
+.activity__body {
+  min-width: 0;
+}
+.activity__name {
+  display: block;
+  font-size: 16px;
+  color: #fff;
+  margin-bottom: 4px;
+}
+.activity__hours {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.activity__ach {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.activity__achlabel {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.activity__achlabel b {
+  color: var(--text);
+  font-weight: 400;
+  margin-left: 4px;
+}
+.activity__bar {
+  flex: 1 1 140px;
+  height: 8px;
+  min-width: 100px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.activity__bar > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #3a6a8a, var(--blue));
+}
+.activity__icons {
+  display: flex;
+  gap: 4px;
+}
+.activity__icons img {
+  width: 28px;
+  height: 28px;
+  border-radius: 2px;
+  background: #000;
+}
+
+/* Sidebar stats + friends */
+.pstat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+.pstat b {
+  font-weight: 300;
+  font-size: 18px;
+  color: var(--text-dim);
+}
+.pstat--link:hover b {
+  color: var(--blue);
+}
+
+.friend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px;
+  border-radius: 2px;
+  color: var(--text);
+}
+.friend:hover {
+  background: rgba(102, 192, 244, 0.12);
+  color: #fff;
+}
+.friend img {
+  width: 34px;
+  height: 34px;
+  border-radius: 2px;
+  background: #000;
+  box-shadow: 0 0 0 1px #4c5153;
+}
+.friend--online img {
+  box-shadow: 0 0 0 1px #57cbde;
+}
+.friend--in-game img {
+  box-shadow: 0 0 0 1px #90ba3c;
+}
+.friend__name {
+  display: block;
+  font-size: 13px;
+  color: #fff;
+}
+.friend__state {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.friend--online .friend__state {
+  color: #57cbde;
+}
+.friend--in-game .friend__state {
+  color: #90ba3c;
+}
+
+/* Animated clips embedded in store descriptions */
+.gamedesc .bb_video {
+  max-width: 100%;
+  height: auto;
+  margin: 10px 0;
+  border-radius: 2px;
+  background: #000;
+}
+
+@media (max-width: 980px) {
+  .players {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 620px) {
+  .activity {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .phead__side {
+    margin-left: 0;
+    align-items: flex-start;
+    text-align: left;
   }
 }

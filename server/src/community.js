@@ -14,14 +14,20 @@ import { fetchText, images, secureUrl, SteamError, COMMUNITY } from './steam.js'
 
 const STEAMID64 = /^\d{17}$/;
 
-/** Steam's XML is machine generated, so targeted extraction is safe here. */
+/**
+ * Steam's XML is machine generated, so targeted extraction is safe here.
+ * Elements may carry attributes — `<achievement closed="1">` is how unlocked
+ * achievements are marked — so the open tag has to tolerate them.
+ */
+const OPEN = (name) => `<${name}(?:\\s[^>]*)?>`;
+
 function tag(xml, name) {
-  const match = new RegExp(`<${name}>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?</${name}>`, 'i').exec(xml);
+  const match = new RegExp(`${OPEN(name)}(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?</${name}>`, 'i').exec(xml);
   return match ? match[1].trim() : null;
 }
 
 function tagAll(xml, name) {
-  return [...xml.matchAll(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`, 'gi'))].map((match) => match[1]);
+  return [...xml.matchAll(new RegExp(`${OPEN(name)}([\\s\\S]*?)</${name}>`, 'gi'))].map((match) => match[1]);
 }
 
 const num = (value) => {
@@ -66,6 +72,27 @@ export async function getCommunityProfile(input) {
   if (!steamid) throw new SteamError('That Steam profile could not be read', { status: 404 });
 
   const privacy = (tag(xml, 'privacyState') || '').toLowerCase();
+  const inGame = /<inGameInfo>([\s\S]*?)<\/inGameInfo>/i.exec(xml)?.[1] || '';
+
+  // The profile XML carries the same "most played" block the real profile page
+  // shows under Recent Activity, including hours in the last two weeks.
+  const mostPlayed = tagAll(xml, 'mostPlayedGame')
+    .map((block) => {
+      const link = tag(block, 'gameLink') || '';
+      const appid = Number(tag(block, 'statsName') || link.match(/\/app\/(\d+)/)?.[1]);
+      if (!Number.isFinite(appid)) return null;
+      return {
+        appid,
+        name: tag(block, 'gameName') || `App ${appid}`,
+        header: images(appid).header,
+        capsule: images(appid).capsule,
+        portrait: images(appid).portrait,
+        icon: secureUrl(tag(block, 'gameIcon')),
+        playtime2Weeks: Math.round((num(tag(block, 'hoursPlayed')) || 0) * 60),
+        playtimeForever: Math.round((num(tag(block, 'hoursOnRecord')) || 0) * 60),
+      };
+    })
+    .filter(Boolean);
 
   return {
     steamid,
@@ -78,12 +105,103 @@ export async function getCommunityProfile(input) {
     memberSince: tag(xml, 'memberSince'),
     location: tag(xml, 'location'),
     realname: tag(xml, 'realname'),
-    summary: (tag(xml, 'summary') || '').replace(/<[^>]+>/g, ' ').trim() || null,
+    headline: (tag(xml, 'headline') || '').replace(/<[^>]+>/g, ' ').trim() || null,
+    summary: (tag(xml, 'summary') || '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .trim() || null,
     // The XML calls a fully public profile "public"; anything else limits games.
     isPublic: privacy === 'public' || privacy === '',
-    playingName: tag(xml, 'inGameInfo') ? tag(tag(xml, 'inGameInfo'), 'gameName') : null,
+    playingName: tag(inGame, 'gameName') || null,
+    playingAppId: Number(tag(inGame, 'gameLink')?.match(/\/app\/(\d+)/)?.[1]) || null,
     vacBanned: tag(xml, 'vacBanned') === '1',
+    limitedAccount: tag(xml, 'isLimitedAccount') === '1',
+    hours2Weeks: num(tag(xml, 'hoursPlayed2Wk')),
+    groupCount: tagAll(xml, 'group').length,
+    mostPlayed,
     source: 'community',
+  };
+}
+
+/**
+ * Friends of a public profile, read from the community friends page.
+ *
+ * There is no key-less XML for friends, and this page is public, so the markup
+ * is parsed for the few fields the sidebar needs. Unexpected markup yields
+ * fewer friends rather than an error.
+ */
+export async function getCommunityFriends(input, { limit = 40 } = {}) {
+  const target = parseProfileInput(input);
+
+  let html;
+  try {
+    html = await fetchText(`${profileUrl(target)}/friends/`);
+  } catch {
+    return { friends: [], total: 0, available: false };
+  }
+
+  const friends = [];
+  const seen = new Set();
+
+  for (const block of html.split('friend_block_v2').slice(1)) {
+    const steamid = /data-steamid="(\d+)"/.exec(block)?.[1];
+    if (!steamid || seen.has(steamid)) continue;
+    seen.add(steamid);
+
+    // State lives in the element's own class list, right at the start.
+    const head = block.slice(0, 300);
+    const state = /\bin-game\b/.test(head) ? 'in-game' : /\bonline\b/.test(head) ? 'online' : 'offline';
+
+    const content = /friend_block_content"?>([\s\S]*?)<\/div>/i.exec(block)?.[1] || '';
+    const parts = content.split(/<br\s*\/?>/i);
+    const name = (parts[0] || '').replace(/<[^>]+>/g, '').trim();
+    const status = (parts[1] || '').replace(/<[^>]+>/g, '').trim();
+
+    friends.push({
+      steamid,
+      name: name || steamid,
+      avatar: secureUrl(/<img[^>]+src="([^"]+)"/i.exec(block)?.[1] || null),
+      state,
+      status: status || null,
+      profileUrl: `${COMMUNITY}/profiles/${steamid}`,
+    });
+
+    if (friends.length >= limit) break;
+  }
+
+  return { friends, total: seen.size, available: true };
+}
+
+/**
+ * Per-game achievement progress from the public stats XML — this is what puts
+ * the "5 of 156" bars under Recent Activity without needing an API key.
+ */
+export async function getCommunityAchievements(steamid, appid) {
+  const id = Number(appid);
+  if (!Number.isFinite(id)) return null;
+
+  let xml;
+  try {
+    xml = await fetchText(`${COMMUNITY}/profiles/${encodeURIComponent(steamid)}/stats/${id}/?xml=1`);
+  } catch {
+    return null;
+  }
+  if (tag(xml, 'error')) return null;
+
+  const all = tagAll(xml, 'achievement');
+  if (all.length === 0) return null;
+
+  // `closed="1"` on the element marks an unlocked achievement.
+  const unlocked = [...xml.matchAll(/<achievement[^>]*closed="1"[^>]*>([\s\S]*?)<\/achievement>/gi)].map((match) => match[1]);
+
+  return {
+    appid: id,
+    total: all.length,
+    unlocked: unlocked.length,
+    icons: unlocked
+      .slice(-5)
+      .map((block) => ({ name: tag(block, 'name'), icon: secureUrl(tag(block, 'iconClosed')) }))
+      .filter((entry) => entry.icon),
   };
 }
 
