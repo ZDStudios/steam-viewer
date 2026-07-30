@@ -11,7 +11,7 @@
 
 window.STEAM_VIEWER_CONFIG = {
   /** e.g. "https://steam-viewer-relay.onrender.com" — no trailing slash. */
-  serverUrl: "",
+  serverUrl: "https://steam-viewer-relay.onrender.com",
 
   /** Default store region (ISO 3166-1 alpha-2) — drives prices and currency. */
   defaultCountry: "us",
