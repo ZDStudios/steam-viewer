@@ -10,11 +10,12 @@
 import { TtlCache } from './cache.js';
 import { Limiter, mapPool } from './limiter.js';
 
-const STORE = 'https://store.steampowered.com';
-const WEBAPI = 'https://api.steampowered.com';
+export const STORE = 'https://store.steampowered.com';
+export const WEBAPI = 'https://api.steampowered.com';
+export const COMMUNITY = 'https://steamcommunity.com';
 const CDN = 'https://cdn.cloudflare.steamstatic.com/steam/apps';
 
-const USER_AGENT =
+export const USER_AGENT =
   process.env.STEAM_USER_AGENT ||
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
@@ -106,6 +107,45 @@ async function fetchJson(url, { timeoutMs = 12_000, retries = 2, headers = {} } 
       const isLast = attempt === retries;
       if (isLast || !lastError.retryable) break;
       await sleep(400 * 2 ** attempt + Math.floor(Math.random() * 250));
+    }
+  }
+
+  throw lastError;
+}
+
+/**
+ * Fetch a non-JSON document (search HTML, community XML) through the same
+ * limiter and retry policy.
+ */
+export async function fetchText(url, { timeoutMs = 15_000, retries = 1, headers = {} } = {}) {
+  let lastError;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await limiter.run(async () => {
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent': USER_AGENT,
+            'Accept-Language': 'en-US,en;q=0.9',
+            Cookie: 'birthtime=283993201; lastagecheckage=1-January-1980; wants_mature_content=1',
+            ...headers,
+          },
+          redirect: 'follow',
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+
+        if (response.status === 429) throw new SteamError('Steam is rate limiting this server', { status: 429, retryable: true });
+        if (response.status >= 500) throw new SteamError(`Steam responded ${response.status}`, { status: 502, retryable: true });
+        if (!response.ok) throw new SteamError(`Steam responded ${response.status}`, { status: response.status });
+
+        const text = await response.text();
+        if (!text.trim()) throw new SteamError('Steam returned an empty body', { status: 502, retryable: true });
+        return text;
+      });
+    } catch (error) {
+      lastError = error instanceof SteamError ? error : new SteamError(error.message || 'Request failed', { retryable: true });
+      if (attempt === retries || !lastError.retryable) break;
+      await sleep(500 * 2 ** attempt);
     }
   }
 
@@ -322,9 +362,40 @@ function cleanRequirements(requirements) {
  * Store endpoints
  * ------------------------------------------------------------------ */
 
+/**
+ * Steam's merchandising rows repeat the same product under several appids —
+ * regional Steam Machine listings, one iRacing entry per season pass, the same
+ * game as both a base app and an edition. Collapse on appid *and* on a
+ * normalised name so the storefront does not show the same box three times.
+ */
+export function dedupeCards(items = [], { seenIds, seenNames } = {}) {
+  const ids = seenIds || new Set();
+  const names = seenNames || new Set();
+
+  const normalizeName = (name) =>
+    String(name || '')
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[™®©]/g, '')
+      // Drop edition/bundle suffixes so "X" and "X - Deluxe Edition" collapse.
+      .replace(/\s*[-–—:|]\s*(deluxe|ultimate|premium|gold|complete|definitive|goty|game of the year|standard|digital|collector'?s?|anniversary|remastered|enhanced)\b.*$/i, '')
+      .replace(/\s*\((?:pc|steam|windows)\)\s*$/i, '')
+      .replace(/[^a-z0-9]+/g, '')
+      .trim();
+
+  return items.filter((item) => {
+    if (!item || !Number.isFinite(item.appid)) return false;
+    const key = normalizeName(item.name);
+    if (ids.has(item.appid) || (key && names.has(key))) return false;
+    ids.add(item.appid);
+    if (key) names.add(key);
+    return true;
+  });
+}
+
 export async function getFeaturedCategories({ cc = 'us', l = 'english' } = {}) {
   const raw = await fetchJson(`${STORE}/api/featuredcategories/?${qs({ cc, l })}`);
-  const pick = (key) => (raw?.[key]?.items || []).map(normalizeStoreItem).filter(Boolean);
+  const pick = (key) => dedupeCards((raw?.[key]?.items || []).map(normalizeStoreItem).filter(Boolean));
 
   return {
     specials: pick('specials'),
@@ -334,19 +405,49 @@ export async function getFeaturedCategories({ cc = 'us', l = 'english' } = {}) {
   };
 }
 
+/**
+ * Prices for many apps in one request. `appdetails` only accepts a comma
+ * separated `appids` list when a `filters` value narrows the payload, which is
+ * what makes a whole-library valuation affordable.
+ */
+export async function getPricesBulk({ appids = [], cc = 'us' } = {}) {
+  const ids = [...new Set(appids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+  const chunks = [];
+  for (let index = 0; index < ids.length; index += 50) chunks.push(ids.slice(index, index + 50));
+
+  const prices = new Map();
+  const results = await mapPool(chunks, 2, async (chunk) => {
+    const raw = await fetchJson(`${STORE}/api/appdetails?${qs({ appids: chunk.join(','), filters: 'price_overview', cc })}`);
+    return raw || {};
+  });
+
+  for (const result of results) {
+    for (const [appid, entry] of Object.entries(result || {})) {
+      if (!entry || entry.success !== true) continue;
+      const overview = entry.data?.price_overview;
+      if (!overview) {
+        prices.set(Number(appid), { free: true, final: 0, currency: null });
+        continue;
+      }
+      prices.set(Number(appid), {
+        free: false,
+        final: overview.final ?? 0,
+        initial: overview.initial ?? overview.final ?? 0,
+        currency: overview.currency || null,
+        discountPercent: overview.discount_percent || 0,
+      });
+    }
+  }
+
+  return prices;
+}
+
 export async function getFeatured({ cc = 'us', l = 'english' } = {}) {
   const raw = await fetchJson(`${STORE}/api/featured/?${qs({ cc, l })}`);
   const capsules = (raw?.large_capsules || []).map(normalizeStoreItem).filter(Boolean);
   const windows = (raw?.featured_win || []).map(normalizeStoreItem).filter(Boolean);
-  const merged = [...capsules, ...windows];
-
   // De-duplicate while preserving the editorial order Steam ships.
-  const seen = new Set();
-  return merged.filter((item) => {
-    if (seen.has(item.appid)) return false;
-    seen.add(item.appid);
-    return true;
-  });
+  return dedupeCards([...capsules, ...windows]);
 }
 
 export async function search({ term, cc = 'us', l = 'english', limit = 40 } = {}) {
@@ -378,6 +479,41 @@ export async function getAppsLite({ appids = [], cc = 'us', l = 'english' } = {}
     const { value } = await cache.wrap(`lite:${id}:${cc}:${l}`, TTL.lite, async () => {
       try {
         return toLite(await getAppDetails({ appid: id, cc, l }));
+      } catch {
+        return null;
+      }
+    });
+    return value;
+  });
+
+  return resolved.filter(Boolean);
+}
+
+/**
+ * Lite card plus the handful of screenshots and the trailer the discovery rows
+ * need. Shares the per-app cache with `getAppsLite`, so a card the visitor has
+ * already seen costs nothing.
+ */
+export async function getAppCards({ appids = [], cc = 'us', l = 'english', shots = 4 } = {}) {
+  const ids = [...new Set(appids.map(Number).filter((n) => Number.isFinite(n) && n > 0))].slice(0, 12);
+
+  const resolved = await mapPool(ids, 3, async (id) => {
+    const { value } = await cache.wrap(`card:${id}:${cc}:${l}`, TTL.lite, async () => {
+      try {
+        const data = await getAppDetails({ appid: id, cc, l });
+        const lite = toLite(data);
+        if (!lite) return null;
+        const movie = (data.movies || [])[0];
+        return {
+          ...lite,
+          screenshots: (data.screenshots || []).slice(0, shots).map((shot) => ({
+            thumb: secureUrl(shot.path_thumbnail),
+            full: secureUrl(shot.path_full),
+          })),
+          preview: movie
+            ? { webm: secureUrl(movie.webm?.['480'] || movie.webm?.max), mp4: secureUrl(movie.mp4?.['480'] || movie.mp4?.max), thumb: secureUrl(movie.thumbnail) }
+            : null,
+        };
       } catch {
         return null;
       }

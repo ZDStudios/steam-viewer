@@ -3,9 +3,18 @@
 An online Steam games viewer: a static site on **GitHub Pages** talking over a **WebSocket** to a small
 **Render** relay that pulls live data from Steam's public store endpoints.
 
-Search the whole catalogue, browse top sellers / new releases / specials / the live most-played chart, and open
-any game for trailers, screenshots, the full store description, tags, system requirements, achievements, DLC,
-news, reviews and a live player count — all styled to feel like Steam.
+Search the whole catalogue, browse top sellers / new releases / specials / genres / the live most-played chart, and
+open any game for trailers, screenshots, the full store description, tags, system requirements, achievements, DLC,
+news, reviews, ownership stats and a live player count — all styled to feel like Steam.
+
+It also does the things a signed-in Steam session normally gates:
+
+- **Discovery rows** on the home page — big capsule, screenshot grid, *Visit Product Page / Add to wishlist / Ignore
+  / Find More like this* — seeded by a **wishlist kept in your browser**, no Steam account involved.
+- **Any public profile, no sign-in** — read through Steam Community's XML, plus a **SteamDB-style account-value
+  calculator** computed from Steam's own bulk pricing.
+- **Developer and publisher pages**.
+- **Remote Play** — pair the companion agent on your gaming PC to list and launch your installed games.
 
 ```
 ┌────────────────────────┐   wss://…/ws (fallback: GET /api/…)   ┌────────────────────────┐   https   ┌───────────┐
@@ -15,8 +24,8 @@ news, reviews and a live player count — all styled to feel like Steam.
                                   most-played chart
 ```
 
-The browser never talks to Steam directly — Steam sends no CORS headers, so a relay is required. The relay holds
-no secrets unless you opt into the Library feature.
+The browser never talks to Steam directly — Steam sends no CORS headers, so a relay is required. The relay holds no
+secrets: an API key is optional and only upgrades profile data.
 
 ---
 
@@ -39,7 +48,7 @@ Optional environment variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `STEAM_API_KEY` | Enables the **Library** view (owned games for a public profile). Get one at <https://steamcommunity.com/dev/apikey>. Everything else works without it. |
+| `STEAM_API_KEY` | **Optional.** Profiles already work without it via community XML; a key adds Steam level, account age and a clearer private-profile signal. Get one at <https://steamcommunity.com/dev/apikey>. |
 | `ALLOWED_ORIGINS` | Comma-separated allow-list, e.g. `https://<your-user>.github.io`. Unset means any origin. |
 
 When it is live, open the service URL — you should get a status page listing the WebSocket endpoint.
@@ -114,6 +123,13 @@ query string, which is what the page falls back to when the socket cannot connec
 | Action | Parameters | Returns |
 | --- | --- | --- |
 | `home` | `cc`, `l` | Featured carousel, specials, top sellers, new releases, coming soon, most played |
+| `discovery` | `seeds` (wishlisted appids), `cc`, `l` | Discovery-queue rows with screenshots and a reason |
+| `browse` | `filters`, `start`, `count` | Arbitrary store-search browsing (sorts, specials, price ceilings) |
+| `creator` | `name`, `role` (`developer`/`publisher`) | A studio's catalogue |
+| `usersearch` | `text`, `page` | Public profiles matching a name |
+| `steamspy` | `appid` | Ownership/playtime estimates plus SteamDB deep links |
+| `calculator` | `id`, `cc` | Account value, hours played, cost per hour |
+| `agent` | `code`, `op`, `appid` | Talk to a paired PC: `status`, `games`, `refresh`, `launch`, `stream` |
 | `search` | `term`, `cc`, `l`, `limit` | Store search results |
 | `app` | `appid`, `cc`, `l` | Full game page: details, media, first page of reviews, recent news |
 | `apps` | `appids` (max 30), `cc`, `l` | Compact cards for a batch of appids |
@@ -122,7 +138,7 @@ query string, which is what the page falls back to when the socket cannot connec
 | `mostplayed` | `cc`, `l`, `limit` | Live most-played chart, enriched with store data |
 | `genre` | `genre`, `cc`, `l` | Genre landing page sections |
 | `news` | `appid`, `count` | Announcements for an app |
-| `profile` | `id` (SteamID64, vanity name or profile URL) | Player summary + owned games — needs `STEAM_API_KEY` |
+| `profile` | `id` (SteamID64, vanity name or profile URL) | Player summary + owned games — Web API if a key is set, otherwise community XML |
 | `genres`, `capabilities`, `ping` | — | Metadata |
 | `subscribe` / `unsubscribe` | `appid` | Start/stop live player-count pushes (WebSocket only) |
 
@@ -138,6 +154,35 @@ single outbound IP. So the relay:
 - de-duplicates identical in-flight requests, so ten simultaneous visitors on one game cause one Steam call;
 - funnels all outbound traffic through a limiter (4 concurrent, ≥80 ms apart) and retries 429/5xx with backoff;
 - throttles callers too — 180 requests/min per IP over HTTP, 60 messages/10s per socket.
+
+## Remote play
+
+`agent/` is a small Node program you run on your gaming PC. See [agent/README.md](agent/README.md).
+
+```bash
+cd agent && npm install
+npm start -- --relay https://your-service.onrender.com
+```
+
+It prints a pairing code; enter that under **Remote Play** on the site. It reads your installed games from Steam's
+`appmanifest_*.acf` files, launches them with `steam://rungameid/<id>`, and dials *out* to the relay so nothing
+needs port-forwarding. It never sees your Steam password.
+
+**Video does not stream into the browser.** Moonlight's GameStream protocol and Steam Remote Play have no browser
+client, and there is no web SDK for Steam Link. Instead the agent detects a
+[Sunshine](https://app.lizardbyte.dev/Sunshine/) host and the site's Stream button hands off to your native
+[Moonlight](https://moonlight-stream.org/) client, already pointed at that PC, with the game already starting.
+
+The pairing code is the only credential — anyone holding it can list and launch games on that PC. It is regenerated
+on every start unless pinned with `--code`, and `--no-launch` runs the agent read-only.
+
+## On SteamDB
+
+SteamDB is linked, not scraped: it sits behind bot protection and its terms do not permit automated access. The
+equivalent numbers are assembled from sources meant to be called programmatically —
+[SteamSpy](https://steamspy.com/api.php) for ownership and playtime estimates, and Steam's own charts and bulk
+pricing API for player counts and the account-value calculator. Every stats panel deep-links to the matching SteamDB
+page.
 
 ## Notes
 
@@ -160,14 +205,20 @@ assets/js/config.js         relay URL + defaults (edit this)
 assets/js/client.js         WebSocket transport, reconnect, HTTP fallback
 assets/js/sanitize.js       allow-list HTML sanitiser
 assets/js/components.js     cards, price blocks, carousel, media player, lightbox
-assets/js/views.js          home / search / game / genre / browse / library / about
+assets/js/wishlist.js       browser-local wishlist and ignore list
+assets/js/views.js          home / search / game / genre / creator / library / wishlist / play / about
 assets/js/app.js            router, header wiring, settings
 server/src/index.js         HTTP + WebSocket server, live pushes
 server/src/actions.js       the action registry (the only way to reach Steam)
-server/src/steam.js         Steam client and response normalisers
+server/src/steam.js         Steam client, response normalisers, de-duplication
+server/src/discover.js      genre / developer / publisher browsing via store search
+server/src/community.js     key-less profile + user search via community XML
+server/src/stats.js         SteamSpy estimates and the account-value calculator
+server/src/agents.js        registry for paired PCs
 server/src/cache.js         TTL cache with in-flight de-duplication
 server/src/limiter.js       outbound concurrency/rate limiting
 server/scripts/smoke.js     end-to-end check against a running relay
+agent/                      the companion program for your gaming PC
 render.yaml                 Render Blueprint
 ```
 

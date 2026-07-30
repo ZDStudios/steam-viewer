@@ -6,6 +6,10 @@
  * a general purpose HTTP proxy.
  */
 import * as steam from './steam.js';
+import * as discover from './discover.js';
+import * as community from './community.js';
+import * as stats from './stats.js';
+import * as agents from './agents.js';
 import { cache, SteamError, TTL } from './steam.js';
 
 const str = (value, fallback = '') => (typeof value === 'string' ? value.trim() : fallback);
@@ -143,13 +147,99 @@ export const ACTIONS = {
   genres: {
     ttl: 24 * 60 * 60_000,
     key: () => 'genres',
-    run: async () => ({ genres: steam.GENRES }),
+    run: async () => ({ genres: discover.GENRES }),
   },
 
   genre: {
     ttl: TTL.genre,
     key: (p) => `genre:${str(p.genre).toLowerCase()}:${clampCc(p.cc)}:${clampLang(p.l)}`,
-    run: (p) => steam.getGenre({ genre: str(p.genre), cc: clampCc(p.cc), l: clampLang(p.l) }),
+    run: (p) => discover.getGenre({ genre: str(p.genre), cc: clampCc(p.cc), l: clampLang(p.l) }),
+  },
+
+  /** Arbitrary store-search browsing: sorts, specials, price ceilings, tags. */
+  browse: {
+    ttl: TTL.genre,
+    key: (p) => `browse:${JSON.stringify(p.filters || {})}:${clampCc(p.cc)}:${clampLang(p.l)}:${Number(p.start) || 0}`,
+    run: (p) =>
+      discover.browse({
+        filters: p.filters && typeof p.filters === 'object' ? p.filters : {},
+        cc: clampCc(p.cc),
+        l: clampLang(p.l),
+        start: Math.min(Math.max(Number(p.start) || 0, 0), 500),
+        count: Math.min(Number(p.count) || 24, 30),
+      }),
+  },
+
+  /** Developer or publisher page. */
+  creator: {
+    ttl: TTL.genre,
+    key: (p) => `creator:${str(p.role, 'developer')}:${str(p.name).toLowerCase()}:${clampCc(p.cc)}:${Number(p.start) || 0}`,
+    run: (p) =>
+      discover.getCreator({
+        name: str(p.name),
+        role: str(p.role) === 'publisher' ? 'publisher' : 'developer',
+        cc: clampCc(p.cc),
+        l: clampLang(p.l),
+        start: Math.min(Math.max(Number(p.start) || 0, 0), 200),
+      }),
+  },
+
+  /**
+   * Discovery-queue style rows. `seeds` are appids the visitor has wishlisted,
+   * so the row can say "Since you wishlisted X" the way the store does.
+   */
+  discovery: {
+    ttl: TTL.home,
+    key: (p) => `discovery:${(Array.isArray(p.seeds) ? p.seeds : String(p.seeds || '').split(',')).slice(0, 3).join(',')}:${clampCc(p.cc)}:${clampLang(p.l)}`,
+    run: async (p) => {
+      const cc = clampCc(p.cc);
+      const l = clampLang(p.l);
+      const seeds = (Array.isArray(p.seeds) ? p.seeds : String(p.seeds || '').split(','))
+        .map(Number)
+        .filter((n) => Number.isFinite(n) && n > 0)
+        .slice(0, 3);
+
+      const rows = [];
+      const used = new Set(seeds);
+
+      // One row per wishlisted game, recommending something from its genre.
+      for (const seed of seeds) {
+        try {
+          const [seedCard] = await steam.getAppsLite({ appids: [seed], cc, l });
+          const genre = seedCard?.genres?.[0];
+          if (!seedCard || !genre) continue;
+
+          const { items } = await discover.browse({ filters: { genre, sort_by: discover.SORTS.topsellers }, cc, l, count: 12 });
+          const pick = items.find((item) => !used.has(item.appid));
+          if (!pick) continue;
+          used.add(pick.appid);
+
+          const [card] = await steam.getAppCards({ appids: [pick.appid], cc, l });
+          if (card) rows.push({ reason: 'Since you wishlisted', because: seedCard.name, becauseAppid: seedCard.appid, item: card });
+        } catch {
+          // A row that cannot be built is simply not shown.
+        }
+      }
+
+      // Top up with editorial picks so the section is never empty.
+      if (rows.length < 3) {
+        const home = await steam.getFeaturedCategories({ cc, l }).catch(() => ({ topSellers: [], newReleases: [] }));
+        const pool = steam
+          .dedupeCards([...(home.topSellers || []), ...(home.newReleases || [])])
+          .filter((item) => !used.has(item.appid))
+          .slice(0, 3 - rows.length + 2);
+
+        const cards = await steam.getAppCards({ appids: pool.map((item) => item.appid), cc, l });
+        for (const card of cards) {
+          if (rows.length >= 3 || used.has(card.appid)) continue;
+          used.add(card.appid);
+          rows.push({ reason: 'Recommended', because: card.genres?.[0] || 'popular on Steam', item: card });
+        }
+      }
+
+      if (rows.length === 0) throw new SteamError('Steam returned nothing to recommend right now', { status: 502, retryable: true });
+      return { rows };
+    },
   },
 
   news: {
@@ -158,11 +248,121 @@ export const ACTIONS = {
     run: (p) => steam.getNews({ appid: appid(p.appid), count: Math.min(Number(p.count) || 8, 20) }),
   },
 
-  /** Requires STEAM_API_KEY on the server. */
+  /**
+   * Profile + owned games. Uses the Web API when a key is configured, and
+   * otherwise falls back to the public community XML, so looking someone up
+   * never requires the visitor — or the relay — to be signed in.
+   */
   profile: {
     ttl: TTL.profile,
-    key: (p) => `profile:${str(p.id).toLowerCase()}`,
-    run: (p) => steam.getProfile({ id: str(p.id), cc: clampCc(p.cc), l: clampLang(p.l) }),
+    key: (p) => `profile:${str(p.id).toLowerCase()}:${clampCc(p.cc)}`,
+    run: async (p) => {
+      const id = str(p.id);
+      const cc = clampCc(p.cc);
+      const l = clampLang(p.l);
+
+      if (steam.hasApiKey()) {
+        try {
+          return await steam.getProfile({ id, cc, l });
+        } catch (error) {
+          // A key that cannot see this profile is no reason to give up.
+          if (error?.status !== 404 && error?.status !== 403) throw error;
+        }
+      }
+
+      const profile = await community.getCommunityProfile(id);
+      const library = await community.getCommunityGames(profile.steamid).catch((error) => ({
+        games: [],
+        error: error.message,
+      }));
+
+      return {
+        steamid: profile.steamid,
+        profile: {
+          name: profile.name,
+          avatar: profile.avatar,
+          profileUrl: profile.profileUrl,
+          state: null,
+          visible: profile.isPublic,
+          country: profile.location,
+          createdAt: null,
+          memberSince: profile.memberSince,
+          playingName: profile.playingName,
+          summary: profile.summary,
+          realname: profile.realname,
+        },
+        level: null,
+        gameCount: library.games.length,
+        games: library.games,
+        recent: library.games.filter((game) => game.playtime2Weeks > 0).slice(0, 12),
+        libraryError: library.error || null,
+        cc,
+        l,
+        source: 'community',
+      };
+    },
+  },
+
+  /** Find public profiles by name — steamcommunity.com/search/users. */
+  usersearch: {
+    ttl: TTL.profile,
+    key: (p) => `usersearch:${str(p.text).toLowerCase()}:${Number(p.page) || 1}`,
+    run: (p) => community.searchUsers({ text: str(p.text), page: Number(p.page) || 1 }),
+  },
+
+  /** Ownership / playtime estimates plus SteamDB deep links. */
+  steamspy: {
+    ttl: 6 * 60 * 60_000,
+    key: (p) => `steamspy:${appid(p.appid)}`,
+    run: (p) => stats.getSteamSpy({ appid: appid(p.appid) }),
+  },
+
+  /** Account-value calculator over a profile's library. */
+  calculator: {
+    ttl: TTL.profile,
+    key: (p) => `calculator:${str(p.id).toLowerCase()}:${clampCc(p.cc)}`,
+    run: async (p) => {
+      const cc = clampCc(p.cc);
+      const { data } = await runAction('profile', { id: str(p.id), cc, l: clampLang(p.l) });
+      const summary = await stats.calculateLibrary({ games: data.games, cc });
+      return {
+        ...summary,
+        steamid: data.steamid,
+        name: data.profile?.name || data.steamid,
+        steamdb: stats.steamdbCalculatorUrl(data.steamid),
+      };
+    },
+  },
+
+  /**
+   * Talk to a paired Steam Viewer Agent running on the visitor's own PC.
+   * Never cached — it is live device state.
+   */
+  agent: {
+    ttl: 0,
+    key: (p) => `agent:${str(p.code)}:${str(p.op)}`,
+    run: async (p) => {
+      const code = str(p.code).toUpperCase();
+      const op = str(p.op, 'status');
+      if (!code) throw new SteamError('Enter the pairing code shown by the agent', { status: 400 });
+
+      switch (op) {
+        case 'status':
+          return agents.status(code);
+        case 'games':
+          return agents.games(code);
+        case 'refresh':
+          return agents.request(code, 'refresh', {});
+        case 'launch':
+          return agents.request(code, 'launch', { appid: appid(p.appid) });
+        case 'stop':
+          return agents.request(code, 'stop', { appid: p.appid ? appid(p.appid) : null });
+        case 'stream':
+          return agents.request(code, 'stream', { appid: p.appid ? appid(p.appid) : null });
+        default:
+          throw new SteamError(`Unknown agent operation “${op}”`, { status: 400 });
+      }
+    },
   },
 
   capabilities: {
@@ -170,8 +370,11 @@ export const ACTIONS = {
     key: () => 'capabilities',
     run: async () => ({
       actions: Object.keys(ACTIONS),
-      library: steam.hasApiKey(),
-      genres: steam.GENRES,
+      // Profiles work either way now; the key only upgrades the data.
+      library: true,
+      apiKey: steam.hasApiKey(),
+      genres: discover.GENRES,
+      remotePlay: true,
     }),
   },
 };

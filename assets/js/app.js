@@ -2,7 +2,20 @@
 import { normalizeBase, Relay } from './client.js';
 import { toast } from './components.js';
 import { $, $$, attachImageFallbacks, debounce, esc, escAttr, formatMoney, REGIONS, scrollToTop } from './util.js';
-import { aboutView, appView, browseView, genreView, homeView, libraryView, searchView } from './views.js';
+import * as wishlist from './wishlist.js';
+import {
+  aboutView,
+  appView,
+  browseView,
+  creatorView,
+  genreView,
+  homeView,
+  libraryView,
+  playView,
+  searchView,
+  usersView,
+  wishlistView,
+} from './views.js';
 
 const CONFIG = window.STEAM_VIEWER_CONFIG || {};
 const LS = {
@@ -83,6 +96,16 @@ relay.on('hello', (capabilities) => {
 });
 
 connPill.addEventListener('click', () => openSettings());
+
+/* Wishlist counter in the primary nav */
+const wishCount = $('#wish-count');
+function paintWishCount() {
+  const total = wishlist.count();
+  wishCount.textContent = String(total);
+  wishCount.hidden = total === 0;
+}
+paintWishCount();
+wishlist.onChange(paintWishCount);
 
 /* Region selector */
 const regionSelect = $('#region-select');
@@ -215,7 +238,7 @@ const runSuggest = debounce(async (term) => {
             ? formatMoney(item.price.final, item.price.currency)
             : '';
         return `<div class="suggest__row" data-index="${index}" data-appid="${item.appid}">
-            <img src="${escAttr(item.header)}" alt="" loading="lazy" referrerpolicy="no-referrer" />
+            <img src="${escAttr(item.header)}" alt="" loading="lazy" />
             <span class="suggest__name">${esc(item.name)}</span>
             <span class="suggest__price">${esc(price)}</span>
           </div>`;
@@ -295,7 +318,20 @@ function parseHash() {
 }
 
 function markActiveNav(path) {
-  const map = { '': 'home', search: 'home', app: 'home', genre: 'home', browse: 'charts', library: 'library', about: 'about' };
+  const map = {
+    '': 'home',
+    search: 'home',
+    app: 'home',
+    genre: 'home',
+    developer: 'home',
+    publisher: 'home',
+    browse: 'charts',
+    library: 'library',
+    users: 'library',
+    wishlist: 'wishlist',
+    play: 'play',
+    about: 'about',
+  };
   const active = path === 'browse' && parseHash().arg !== 'mostplayed' ? 'home' : map[path] || 'home';
   $$('.topbar__nav a').forEach((link) => link.classList.toggle('is-active', link.dataset.nav === active));
 
@@ -345,7 +381,22 @@ async function route(force = false) {
         result = await browseView(main, ctx, arg);
         break;
       case 'library':
-        result = await libraryView(main, ctx);
+        result = await libraryView(main, ctx, arg);
+        break;
+      case 'users':
+        result = await usersView(main, ctx, arg);
+        break;
+      case 'wishlist':
+        result = wishlistView(main, ctx);
+        break;
+      case 'play':
+        result = await playView(main, ctx);
+        break;
+      case 'developer':
+        result = await creatorView(main, ctx, 'developer', arg);
+        break;
+      case 'publisher':
+        result = await creatorView(main, ctx, 'publisher', arg);
         break;
       case 'about':
         result = aboutView(main, ctx);

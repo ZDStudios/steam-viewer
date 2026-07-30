@@ -50,13 +50,20 @@ export function priceHtml(price) {
 }
 
 /** Steam's CDN 404s on a fair number of older capsules — chain the fallbacks. */
+/**
+ * Steam has moved store art between CDN hosts several times and still 404s on
+ * plenty of older capsules, so every image carries an ordered list of
+ * alternates that `attachImageFallbacks` walks on error.
+ */
 function imageChain(item, primary) {
   const appid = item.appid;
   const chain = [
     item.header,
     item.capsule,
-    `https://cdn.cloudflare.steamstatic.com/steam/apps/${appid}/header.jpg`,
     `https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/${appid}/header.jpg`,
+    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appid}/header.jpg`,
+    `https://cdn.cloudflare.steamstatic.com/steam/apps/${appid}/header.jpg`,
+    `https://cdn.akamai.steamstatic.com/steam/apps/${appid}/header.jpg`,
   ].filter((url, index, all) => url && url !== primary && all.indexOf(url) === index);
   return chain.join('|');
 }
@@ -65,18 +72,23 @@ function imageChain(item, primary) {
  * Cards
  * ------------------------------------------------------------------ */
 
-export function cardHtml(item, { rank = null, live = null } = {}) {
+export function cardHtml(item, { rank = null, live = null, wishlisted = false } = {}) {
   if (!item) return '';
-  const primary = item.header || item.capsule || '';
+  const primary = item.header || item.capsule || `https://cdn.cloudflare.steamstatic.com/steam/apps/${item.appid}/header.jpg`;
   const tags = (item.genres || []).slice(0, 3).join(', ');
   const meta = item.releaseDate && !tags ? item.releaseDate : tags;
+  // Muted looping webm on hover — Steam's "microtrailer" behaviour.
+  const preview = item.preview?.webm || item.preview?.mp4 || '';
 
-  return `<a class="card" href="#/app/${item.appid}" data-appid="${item.appid}">
+  return `<a class="card" href="#/app/${item.appid}" data-appid="${item.appid}"${preview ? ` data-preview="${escAttr(preview)}"` : ''}>
     <div class="card__shot">
       <img src="${escAttr(primary)}" data-fallback="${escAttr(imageChain(item, primary))}"
-           alt="${escAttr(item.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" />
+           alt="${escAttr(item.name)}" loading="lazy" decoding="async" />
       ${rank ? `<span class="card__rank">#${rank}</span>` : ''}
-      ${item.hasVideo ? '<span class="card__video">TRAILER</span>' : ''}
+      ${item.hasVideo || preview ? '<span class="card__video">TRAILER</span>' : ''}
+      <button class="card__wish${wishlisted ? ' is-on' : ''}" type="button" data-wish="${item.appid}"
+              title="${wishlisted ? 'Remove from wishlist' : 'Add to wishlist'}"
+              aria-label="${wishlisted ? 'Remove from wishlist' : 'Add to wishlist'}">${wishlisted ? '★' : '☆'}</button>
     </div>
     <div class="card__body">
       <div class="card__name" title="${escAttr(item.name)}">${esc(item.name)}</div>
@@ -90,13 +102,130 @@ export function cardHtml(item, { rank = null, live = null } = {}) {
   </a>`;
 }
 
+/**
+ * Play a card's microtrailer while the pointer is over it. One shared element
+ * is moved between cards so a grid never holds dozens of decoders open.
+ */
+export function attachHoverPreviews(root = document) {
+  if (window.matchMedia('(hover: none), (prefers-reduced-motion: reduce)').matches) return;
+
+  for (const card of $$('.card[data-preview]', root)) {
+    if (card.dataset.previewBound) continue;
+    card.dataset.previewBound = '1';
+
+    let video = null;
+    let timer = null;
+
+    const stop = () => {
+      clearTimeout(timer);
+      if (!video) return;
+      video.remove();
+      video.removeAttribute('src');
+      video = null;
+      card.classList.remove('is-previewing');
+    };
+
+    card.addEventListener('mouseenter', () => {
+      // A short delay stops a sweep across the grid from starting ten videos.
+      timer = setTimeout(() => {
+        video = document.createElement('video');
+        video.className = 'card__preview';
+        video.src = card.dataset.preview;
+        video.muted = true;
+        video.loop = true;
+        video.playsInline = true;
+        video.preload = 'none';
+        video.addEventListener('error', stop);
+        $('.card__shot', card)?.appendChild(video);
+        card.classList.add('is-previewing');
+        video.play().catch(stop);
+      }, 320);
+    });
+
+    card.addEventListener('mouseleave', stop);
+  }
+}
+
+/** Belt-and-braces de-duplication for anything assembled client-side. */
+export function dedupe(items = []) {
+  const ids = new Set();
+  const names = new Set();
+  return items.filter((item) => {
+    const appid = Number(item?.appid);
+    if (!Number.isFinite(appid)) return false;
+    const key = String(item.name || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '');
+    if (ids.has(appid) || (key && names.has(key))) return false;
+    ids.add(appid);
+    if (key) names.add(key);
+    return true;
+  });
+}
+
+/**
+ * A discovery-queue row: big capsule on the left, a 2×2 screenshot grid on the
+ * right, and the store's action buttons underneath the title.
+ */
+export function discoveryRowHtml(row, { wishlisted = false } = {}) {
+  const item = row.item;
+  if (!item) return '';
+  const shots = (item.screenshots || []).slice(0, 4);
+  const hero = item.capsule || item.header;
+
+  return `<section class="disco" data-appid="${item.appid}">
+    <header class="disco__head">
+      <div>
+        <a class="disco__title" href="#/app/${item.appid}">${esc(item.name)}</a>
+        <div class="disco__reason">${esc(row.reason)} ${row.because ? `<strong>${esc(row.because)}</strong>` : ''}</div>
+      </div>
+      <div class="disco__actions">
+        <a class="btn btn--ghost btn--sm" href="#/app/${item.appid}">Visit Product Page</a>
+        <button class="btn btn--ghost btn--sm" type="button" data-wish="${item.appid}">${wishlisted ? '★ On wishlist' : '☆ Add to wishlist'}</button>
+        <button class="btn btn--ghost btn--sm" type="button" data-ignore="${item.appid}">Ignore</button>
+        ${item.genres?.[0] ? `<a class="btn btn--ghost btn--sm" href="#/genre/${encodeURIComponent(item.genres[0])}">Find More like this</a>` : ''}
+      </div>
+    </header>
+
+    <div class="disco__body">
+      <a class="disco__hero" href="#/app/${item.appid}">
+        <img src="${escAttr(hero)}" data-fallback="${escAttr(imageChain(item, hero))}" alt="${escAttr(item.name)}" loading="lazy" decoding="async" />
+      </a>
+      <div class="disco__shots">
+        ${shots
+          .map(
+            (shot, index) =>
+              `<button class="disco__shot" type="button" data-shot="${index}" aria-label="Screenshot ${index + 1}">
+                 <img src="${escAttr(shot.thumb || shot.full)}" alt="" loading="lazy" decoding="async" />
+               </button>`,
+          )
+          .join('')}
+      </div>
+    </div>
+
+    <footer class="disco__foot">
+      ${platformsHtml(item.platforms)}
+      <span class="disco__tags">${esc((item.genres || []).slice(0, 3).join(', '))}</span>
+      ${priceHtml(item.price)}
+    </footer>
+  </section>`;
+}
+
 export function portraitCardHtml(game, { subtitle = '' } = {}) {
-  const portrait = game.portrait || `https://cdn.cloudflare.steamstatic.com/steam/apps/${game.appid}/library_600x900.jpg`;
-  return `<a class="pcard" href="#/app/${game.appid}" title="${escAttr(game.name)}">
+  const appid = game.appid;
+  const portrait = game.portrait || `https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/${appid}/library_600x900.jpg`;
+  const fallbacks = [
+    `https://cdn.cloudflare.steamstatic.com/steam/apps/${appid}/library_600x900.jpg`,
+    game.capsule,
+    game.header,
+    `https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/${appid}/header.jpg`,
+    `https://cdn.cloudflare.steamstatic.com/steam/apps/${appid}/header.jpg`,
+  ].filter((url, index, all) => url && url !== portrait && all.indexOf(url) === index);
+
+  return `<a class="pcard" href="#/app/${appid}" title="${escAttr(game.name)}">
     <span class="pcard__fallback">${esc(game.name)}</span>
-    <img class="pcard__img" src="${escAttr(portrait)}"
-         data-fallback="${escAttr([game.capsule, game.header].filter(Boolean).join('|'))}"
-         alt="${escAttr(game.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" />
+    <img class="pcard__img" src="${escAttr(portrait)}" data-fallback="${escAttr(fallbacks.join('|'))}"
+         alt="${escAttr(game.name)}" loading="lazy" decoding="async" />
     <span class="pcard__foot"><span>${esc(game.name)}</span>${subtitle ? `<span>${esc(subtitle)}</span>` : ''}</span>
   </a>`;
 }
@@ -112,7 +241,15 @@ export function sectionHtml({ title, note = '', link = null, linkLabel = 'See al
 }
 
 export function cardsHtml(items = [], options = {}) {
-  return items.map((item, index) => cardHtml(item, { rank: options.ranked ? index + 1 : null, live: options.live?.(item) })).join('');
+  return dedupe(items)
+    .map((item, index) =>
+      cardHtml(item, {
+        rank: options.ranked ? index + 1 : null,
+        live: options.live?.(item),
+        wishlisted: options.isWishlisted?.(item.appid) || false,
+      }),
+    )
+    .join('');
 }
 
 export const skeletonGrid = (count = 8) =>
@@ -263,15 +400,35 @@ export function mountPlayer(root, media, { onZoom } = {}) {
 
     if (entry.kind === 'video') {
       const video = document.createElement('video');
-      video.src = entry.src;
       video.poster = entry.poster || entry.thumb;
       video.controls = true;
       video.preload = 'metadata';
       video.playsInline = true;
-      video.setAttribute('crossorigin', 'anonymous');
+      // NB: no crossorigin attribute. Steam's video CDN sends no
+      // Access-Control-Allow-Origin, so requesting a CORS fetch makes the
+      // browser refuse every trailer.
+
+      // Steam offers the same trailer at several bitrates and in two
+      // containers; walk them until one plays.
+      const sources = (entry.sources || [entry.src]).filter(Boolean);
+      let attempt = 0;
+      const tryNext = () => {
+        if (attempt >= sources.length) {
+          stage.replaceChildren(
+            el(`<p class="loading-note">This trailer would not play.
+                <a href="${escAttr(sources[0] || '#')}" target="_blank" rel="noopener noreferrer">Open it directly</a>.</p>`),
+          );
+          return;
+        }
+        video.src = sources[attempt++];
+        video.load();
+      };
+      video.addEventListener('error', tryNext);
+
       stage.appendChild(video);
+      tryNext();
       video.play().catch(() => {
-        /* autoplay blocked — the user can press play */
+        /* autoplay blocked — the controls are right there */
       });
     } else {
       const img = document.createElement('img');

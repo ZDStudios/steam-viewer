@@ -15,6 +15,7 @@ import express from 'express';
 import { WebSocketServer } from 'ws';
 
 import { ACTIONS, runAction } from './actions.js';
+import * as agents from './agents.js';
 import { cache, hasApiKey, internals, SteamError } from './steam.js';
 
 const PORT = Number(process.env.PORT) || 8080;
@@ -80,7 +81,8 @@ app.get('/healthz', (req, res) => {
     clients: wss ? wss.clients.size : 0,
     cache: cache.stats(),
     steam: internals.limiter.stats(),
-    library: hasApiKey(),
+    apiKey: hasApiKey(),
+    ...agents.stats(),
   });
 });
 
@@ -143,7 +145,75 @@ app.use((req, res) => res.status(404).json({ ok: false, error: { message: 'Not f
  * ------------------------------------------------------------------ */
 
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
+
+/**
+ * Two WebSocket endpoints share one port: `/ws` for browsers, `/agent` for the
+ * companion agent on a visitor's PC (its payload cap is larger because it
+ * uploads a whole installed-games list on connect).
+ *
+ * Both use `noServer` and are routed by hand below. Attaching two `path`-bound
+ * WebSocketServers to the same http server does not work: each one aborts the
+ * other's upgrades with a 400 before the right handler ever sees them.
+ */
+const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+const agentWss = new WebSocketServer({ noServer: true, maxPayload: 512 * 1024 });
+
+server.on('upgrade', (req, socket, head) => {
+  let pathname;
+  try {
+    pathname = new URL(req.url, 'http://localhost').pathname.replace(/\/+$/, '') || '/';
+  } catch {
+    socket.destroy();
+    return;
+  }
+
+  const target = pathname === '/ws' ? wss : pathname === '/agent' ? agentWss : null;
+  if (!target) {
+    socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
+  target.handleUpgrade(req, socket, head, (ws) => target.emit('connection', ws, req));
+});
+
+agentWss.on('connection', (socket) => {
+  socket.isAlive = true;
+  socket.on('pong', () => {
+    socket.isAlive = true;
+  });
+
+  socket.on('message', (raw) => {
+    let message;
+    try {
+      message = JSON.parse(raw.toString());
+    } catch {
+      return;
+    }
+
+    try {
+      if (message.type === 'register') {
+        const entry = agents.register({ socket, code: message.code, info: message.info, games: message.games });
+        socket.send(JSON.stringify({ type: 'registered', code: entry.code, at: Date.now() }));
+        console.log(`[steam-viewer] agent ${entry.code} paired from ${entry.info.host} (${entry.games.length} games)`);
+        return;
+      }
+      if (message.type === 'games') {
+        agents.updateGames(socket, message.games);
+        return;
+      }
+      if (message.id) {
+        agents.resolveReply(socket, message);
+      }
+    } catch (error) {
+      socket.send(JSON.stringify({ type: 'error', error: { message: error.message } }));
+    }
+  });
+
+  const drop = () => agents.unregister(socket);
+  socket.on('close', drop);
+  socket.on('error', drop);
+});
 
 const WS_WINDOW_MS = 10_000;
 const WS_MAX_MESSAGES = Number(process.env.WS_LIMIT_PER_WINDOW || 60);
@@ -245,16 +315,18 @@ wss.on('connection', (socket, req) => {
 
 /** Drop half-open sockets — Render's proxy will not always close them for us. */
 const heartbeat = setInterval(() => {
-  for (const socket of wss.clients) {
-    if (socket.isAlive === false) {
-      socket.terminate();
-      continue;
-    }
-    socket.isAlive = false;
-    try {
-      socket.ping();
-    } catch {
-      socket.terminate();
+  for (const pool of [wss.clients, agentWss.clients]) {
+    for (const socket of pool) {
+      if (socket.isAlive === false) {
+        socket.terminate();
+        continue;
+      }
+      socket.isAlive = false;
+      try {
+        socket.ping();
+      } catch {
+        socket.terminate();
+      }
     }
   }
 }, 30_000);

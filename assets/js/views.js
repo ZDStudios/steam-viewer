@@ -1,7 +1,10 @@
 /** Every screen in the app. Each view renders into `root` and may return a
  *  cleanup function that the router calls before the next navigation. */
 import {
+  attachHoverPreviews,
   cardsHtml,
+  dedupe,
+  discoveryRowHtml,
   heroHtml,
   lightbox,
   mountHero,
@@ -16,7 +19,44 @@ import {
   toast,
 } from './components.js';
 import { renderRichText } from './sanitize.js';
-import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatNumber, formatPlaytime } from './util.js';
+import * as wishlist from './wishlist.js';
+import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime } from './util.js';
+
+/** Card options every grid shares: hide ignored titles, mark wishlisted ones. */
+const cardOpts = (extra = {}) => ({ isWishlisted: (appid) => wishlist.has(appid), ...extra });
+const visible = (items = []) => wishlist.filterIgnored(dedupe(items));
+
+/** Wire up every ☆ / Ignore control inside `root`. */
+function bindItemActions(root, lookup) {
+  root.addEventListener('click', (event) => {
+    const wishButton = event.target.closest('[data-wish]');
+    const ignoreButton = event.target.closest('[data-ignore]');
+    if (!wishButton && !ignoreButton) return;
+
+    // These live inside <a class="card">, so stop the navigation.
+    event.preventDefault();
+    event.stopPropagation();
+
+    const appid = Number((wishButton || ignoreButton).dataset.wish || (wishButton || ignoreButton).dataset.ignore);
+    const game = lookup?.(appid) || { appid, name: `App ${appid}` };
+
+    if (wishButton) {
+      const added = wishlist.toggle(game);
+      toast(added ? `${game.name} added to your wishlist` : `${game.name} removed from your wishlist`, 'ok', 2600);
+      for (const button of $$(`[data-wish="${appid}"]`, root)) {
+        button.classList.toggle('is-on', added);
+        button.textContent = button.classList.contains('btn') ? (added ? '★ On wishlist' : '☆ Add to wishlist') : added ? '★' : '☆';
+        button.title = added ? 'Remove from wishlist' : 'Add to wishlist';
+      }
+      return;
+    }
+
+    wishlist.ignore(appid);
+    toast(`${game.name} hidden from recommendations`, 'ok', 2600);
+    ignoreButton.closest('.disco')?.remove();
+    ignoreButton.closest('.card')?.remove();
+  });
+}
 
 function errorHtml(error, { retryLabel = 'Try again' } = {}) {
   return `<div class="empty">
@@ -50,50 +90,107 @@ export async function homeView(root, ctx) {
   ctx.setTitle('Steam Viewer');
 
   const liveLabel = (item) => (item.concurrent ? `${formatNumber(item.concurrent)} playing now` : '');
+  const featured = visible(data.featured || []);
+
+  // Index every card on the page so the wishlist buttons can save real data.
+  const index = new Map();
+  for (const list of [data.featured, data.mostPlayed, data.specials, data.topSellers, data.newReleases, data.comingSoon]) {
+    for (const item of list || []) index.set(item.appid, item);
+  }
 
   root.innerHTML = `
-    ${heroHtml(data.featured || [])}
+    ${heroHtml(featured)}
+
+    <div id="discovery-slot"></div>
+
     ${
       data.mostPlayed?.length
         ? sectionHtml({
             title: 'Most Played Right Now',
             note: 'live from Steam',
             link: '#/browse/mostplayed',
-            body: cardsHtml(data.mostPlayed.slice(0, 8), { ranked: true, live: liveLabel }),
+            body: cardsHtml(visible(data.mostPlayed).slice(0, 8), cardOpts({ ranked: true, live: liveLabel })),
           })
         : ''
     }
     ${
       data.specials?.length
-        ? sectionHtml({ title: 'Special Offers', link: '#/browse/specials', body: cardsHtml(data.specials.slice(0, 8)) })
+        ? sectionHtml({ title: 'Special Offers', link: '#/browse/specials', body: cardsHtml(visible(data.specials).slice(0, 8), cardOpts()) })
         : ''
     }
     ${
       data.topSellers?.length
-        ? sectionHtml({ title: 'Top Sellers', link: '#/browse/topsellers', body: cardsHtml(data.topSellers.slice(0, 8)) })
+        ? sectionHtml({ title: 'Top Sellers', link: '#/browse/topsellers', body: cardsHtml(visible(data.topSellers).slice(0, 8), cardOpts()) })
         : ''
     }
     ${
       data.newReleases?.length
-        ? sectionHtml({ title: 'New Releases', link: '#/browse/newreleases', body: cardsHtml(data.newReleases.slice(0, 8)) })
+        ? sectionHtml({ title: 'New Releases', link: '#/browse/newreleases', body: cardsHtml(visible(data.newReleases).slice(0, 8), cardOpts()) })
         : ''
     }
     ${
       data.comingSoon?.length
-        ? sectionHtml({ title: 'Coming Soon', link: '#/browse/comingsoon', body: cardsHtml(data.comingSoon.slice(0, 8)) })
+        ? sectionHtml({ title: 'Coming Soon', link: '#/browse/comingsoon', body: cardsHtml(visible(data.comingSoon).slice(0, 8), cardOpts()) })
         : ''
     }
   `;
 
   attachImageFallbacks(root);
-  const stopHero = mountHero(root, data.featured || []);
+  attachHoverPreviews(root);
+  bindItemActions(root, (appid) => index.get(appid));
+  const stopHero = mountHero(root, featured);
+
+  /* Discovery rows load after the fold so they never delay the storefront. */
+  const slot = $('#discovery-slot', root);
+  slot.innerHTML = `<div class="section"><div class="section__head"><h2 class="section__title">Recommended For You</h2></div>
+    <div class="skeleton" style="height:280px"></div></div>`;
+
+  ctx.relay
+    .request('discovery', { seeds: wishlist.seeds(3), cc: ctx.region, l: ctx.language })
+    .then((payload) => {
+      const rows = (payload.rows || []).filter((row) => !wishlist.isIgnored(row.item?.appid));
+      if (rows.length === 0) {
+        slot.innerHTML = '';
+        return;
+      }
+      for (const row of rows) index.set(row.item.appid, row.item);
+
+      slot.innerHTML = `<section class="section">
+        <div class="section__head">
+          <h2 class="section__title">Recommended For You<small>${
+            wishlist.count() ? 'based on your wishlist' : 'add games to your wishlist to tune this'
+          }</small></h2>
+          <a class="section__link" href="#/wishlist">Your wishlist (${wishlist.count()}) &rsaquo;</a>
+        </div>
+        ${rows.map((row) => discoveryRowHtml(row, { wishlisted: wishlist.has(row.item.appid) })).join('')}
+      </section>`;
+
+      attachImageFallbacks(slot);
+
+      // Clicking a screenshot opens that game's shots in the lightbox.
+      slot.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-shot]');
+        if (!button) return;
+        const appid = Number(button.closest('.disco')?.dataset.appid);
+        const row = rows.find((entry) => entry.item.appid === appid);
+        if (!row) return;
+        lightbox.open(
+          (row.item.screenshots || []).map((shot) => shot.full || shot.thumb),
+          Number(button.dataset.shot) || 0,
+        );
+      });
+    })
+    .catch(() => {
+      slot.innerHTML = '';
+    });
 
   // The relay pushes a refreshed most-played list every couple of minutes.
   const off = ctx.relay.on('live', (payload) => {
     const section = $$('.section', root).find((node) => $('.section__title', node)?.textContent.startsWith('Most Played'));
     if (!section || !payload?.mostPlayed?.length) return;
-    $('.grid', section).innerHTML = cardsHtml(payload.mostPlayed.slice(0, 8), { ranked: true, live: liveLabel });
+    $('.grid', section).innerHTML = cardsHtml(visible(payload.mostPlayed).slice(0, 8), cardOpts({ ranked: true, live: liveLabel }));
     attachImageFallbacks(section);
+    attachHoverPreviews(section);
   });
 
   return () => {
@@ -131,12 +228,17 @@ export async function browseView(root, ctx, which) {
         title: config.title,
         note: `${items.length} title${items.length === 1 ? '' : 's'}`,
         body:
-          cardsHtml(items, {
-            ranked: config.ranked,
-            live: (item) => (item.concurrent ? `${formatNumber(item.concurrent)} playing now` : ''),
-          }) || '<p class="loading-note">Steam returned nothing for this section right now.</p>',
+          cardsHtml(
+            visible(items),
+            cardOpts({
+              ranked: config.ranked,
+              live: (item) => (item.concurrent ? `${formatNumber(item.concurrent)} playing now` : ''),
+            }),
+          ) || '<p class="loading-note">Steam returned nothing for this section right now.</p>',
       })}`;
     attachImageFallbacks(root);
+    attachHoverPreviews(root);
+    bindItemActions(root, (appid) => items.find((item) => item.appid === appid));
   } catch (error) {
     root.innerHTML = errorHtml(error);
     bindRetry(root, () => browseView(root, ctx, which));
@@ -168,10 +270,12 @@ export async function searchView(root, ctx, term) {
         title: `Results for “${query}”`,
         note: `${formatNumber(result.total ?? items.length)} match${(result.total ?? items.length) === 1 ? '' : 'es'}`,
         body:
-          cardsHtml(items) ||
+          cardsHtml(items, cardOpts()) ||
           `<p class="loading-note">Nothing matched “${esc(query)}”. Try a shorter or differently spelled term.</p>`,
       })}`;
     attachImageFallbacks(root);
+    attachHoverPreviews(root);
+    bindItemActions(root, (appid) => items.find((item) => item.appid === appid));
   } catch (error) {
     root.innerHTML = errorHtml(error);
     bindRetry(root, () => searchView(root, ctx, query));
@@ -193,9 +297,12 @@ export async function genreView(root, ctx, genre) {
       <div class="breadcrumbs"><a href="#/">Store</a> &rsaquo; ${esc(data.genre || name)}</div>
       <h1 class="apphead__title" style="margin-bottom:18px">${esc(data.genre || name)}</h1>
       ${(data.sections || [])
-        .map((section) => sectionHtml({ title: section.label, body: cardsHtml(section.items || []) }))
+        .map((section) => sectionHtml({ title: section.label, body: cardsHtml(visible(section.items || []), cardOpts()) }))
         .join('') || '<div class="empty"><h2>No titles found</h2><p>Steam returned an empty genre listing.</p></div>'}`;
     attachImageFallbacks(root);
+    attachHoverPreviews(root);
+    const all = (data.sections || []).flatMap((section) => section.items || []);
+    bindItemActions(root, (appid) => all.find((item) => item.appid === appid));
   } catch (error) {
     root.innerHTML = errorHtml(error);
     bindRetry(root, () => genreView(root, ctx, genre));
@@ -216,6 +323,69 @@ function scoreClass(desc = '') {
 function factRow(key, value) {
   if (!value) return '';
   return `<div class="factbox__row"><div class="factbox__key">${esc(key)}</div><div class="factbox__val">${value}</div></div>`;
+}
+
+/** Studio names become links to their catalogue page. */
+function creatorLinks(names = [], role = 'developer') {
+  if (!names?.length) return '';
+  return names
+    .slice(0, 4)
+    .map((name) => `<a href="#/${role}/${encodeURIComponent(name)}">${esc(name)}</a>`)
+    .join(', ');
+}
+
+/**
+ * SteamDB-style panel. The figures come from SteamSpy and Steam's own charts —
+ * SteamDB is linked rather than scraped, since it sits behind bot protection
+ * and its terms do not permit it.
+ */
+function statsHtml(spy, game) {
+  const links = spy?.steamdb || {
+    app: `https://steamdb.info/app/${game.appid}/`,
+    charts: `https://steamdb.info/app/${game.appid}/charts/`,
+    depots: `https://steamdb.info/app/${game.appid}/depots/`,
+    history: `https://steamdb.info/app/${game.appid}/price/`,
+  };
+
+  const tiles = spy
+    ? [
+        ['Owners (est.)', spy.owners || '—'],
+        ['Peak players today', spy.ccu ? formatNumber(spy.ccu) : '—'],
+        ['Positive reviews', spy.positivePercent !== null ? `${spy.positivePercent}%` : '—'],
+        ['Total reviews', spy.reviewTotal ? formatNumber(spy.reviewTotal) : '—'],
+        ['Average playtime', spy.averagePlaytimeForever ? formatPlaytime(spy.averagePlaytimeForever) : '—'],
+        ['Median playtime', spy.medianPlaytimeForever ? formatPlaytime(spy.medianPlaytimeForever) : '—'],
+        ['Played last 2 weeks', spy.averagePlaytime2Weeks ? formatPlaytime(spy.averagePlaytime2Weeks) : '—'],
+        ['App ID', String(game.appid)],
+      ]
+    : [];
+
+  return `
+    ${
+      spy
+        ? `<div class="stats">${tiles
+            .map(([label, value]) => `<div class="stats__tile"><b>${esc(value)}</b><span>${esc(label)}</span></div>`)
+            .join('')}</div>`
+        : '<p class="loading-note" style="text-align:left">SteamSpy has no estimates for this title. The SteamDB links below still work.</p>'
+    }
+
+    ${
+      spy?.tags?.length
+        ? `<h3 style="color:#fff;font-size:14px;margin:18px 0 8px">Community tags</h3>
+           <div>${spy.tags.map((tag) => `<span class="chip">${esc(tag.name)} <small>${formatNumber(tag.votes)}</small></span>`).join('')}</div>`
+        : ''
+    }
+
+    <h3 style="color:#fff;font-size:14px;margin:18px 0 8px">Open on SteamDB</h3>
+    <div class="disco__actions">
+      <a class="btn btn--ghost btn--sm" href="${escAttr(links.app)}" target="_blank" rel="noopener noreferrer">App page</a>
+      <a class="btn btn--ghost btn--sm" href="${escAttr(links.charts)}" target="_blank" rel="noopener noreferrer">Player charts</a>
+      <a class="btn btn--ghost btn--sm" href="${escAttr(links.history)}" target="_blank" rel="noopener noreferrer">Price history</a>
+      <a class="btn btn--ghost btn--sm" href="${escAttr(links.depots)}" target="_blank" rel="noopener noreferrer">Depots</a>
+    </div>
+    <p class="loading-note" style="text-align:left;margin-top:10px">
+      Estimates from SteamSpy${spy ? '' : ' (unavailable)'} and Steam's own charts. SteamDB is linked, not scraped.
+    </p>`;
 }
 
 function reviewSummaryHtml(summary) {
@@ -304,13 +474,16 @@ export async function appView(root, ctx, appid) {
   ctx.setTitle(`${game.name} · Steam Viewer`);
 
   const media = [
-    ...(game.movies || []).map((movie) => ({
-      kind: 'video',
-      thumb: movie.thumb,
-      src: movie.mp4 || movie.webm || movie.mp4Low,
-      poster: movie.thumb,
-      label: movie.name || 'Trailer',
-    })).filter((entry) => entry.src),
+    ...(game.movies || [])
+      .map((movie) => ({
+        kind: 'video',
+        thumb: movie.thumb,
+        // Ordered by preference; mountPlayer falls through on error.
+        sources: [movie.mp4, movie.mp4Low, movie.webm].filter(Boolean),
+        poster: movie.thumb,
+        label: movie.name || 'Trailer',
+      }))
+      .filter((entry) => entry.sources.length > 0),
     ...(game.screenshots || []).map((shot, index) => ({
       kind: 'image',
       thumb: shot.thumb,
@@ -339,8 +512,8 @@ export async function appView(root, ctx, appid) {
       <h1 class="apphead__title">${esc(game.name)}</h1>
       <div class="apphead__sub">
         ${game.releaseDate ? `<span>${game.comingSoon ? 'Planned release' : 'Released'}: ${esc(game.releaseDate)}</span>` : ''}
-        ${game.developers?.length ? `<span>Developer: ${esc(game.developers.join(', '))}</span>` : ''}
-        ${game.publishers?.length ? `<span>Publisher: ${esc(game.publishers.join(', '))}</span>` : ''}
+        ${game.developers?.length ? `<span>Developer: ${creatorLinks(game.developers, 'developer')}</span>` : ''}
+        ${game.publishers?.length ? `<span>Publisher: ${creatorLinks(game.publishers, 'publisher')}</span>` : ''}
         ${game.metacritic ? `<span>Metacritic: ${esc(game.metacritic)}</span>` : ''}
       </div>
     </header>
@@ -354,6 +527,7 @@ export async function appView(root, ctx, appid) {
           <button data-tab="reviews" role="tab">Reviews</button>
           <button data-tab="news" role="tab">News</button>
           <button data-tab="requirements" role="tab">System Requirements</button>
+          <button data-tab="stats" role="tab">Stats</button>
           ${game.dlc?.length ? '<button data-tab="dlc" role="tab">DLC</button>' : ''}
           ${game.achievements?.total ? '<button data-tab="achievements" role="tab">Achievements</button>' : ''}
         </div>
@@ -385,6 +559,8 @@ export async function appView(root, ctx, appid) {
 
         <div id="tab-requirements" class="tabpanel" hidden>${requirementsHtml(game.requirements)}</div>
 
+        <div id="tab-stats" class="tabpanel" hidden><div id="stats-body"><p class="loading-note">Loading estimates…</p></div></div>
+
         ${game.dlc?.length ? '<div id="tab-dlc" class="tabpanel" hidden><div class="grid" id="dlc-grid">' + skeletonGrid(4) + '</div></div>' : ''}
 
         ${
@@ -413,6 +589,7 @@ export async function appView(root, ctx, appid) {
           <span class="buybox__label">${game.comingSoon ? 'Coming soon' : 'Price on Steam'}</span>
           ${priceHtml(game.price)}
           <a class="btn btn--green" href="${escAttr(game.storeUrl)}" target="_blank" rel="noopener noreferrer">View on Steam</a>
+          <button class="btn" type="button" data-wish="${game.appid}">${wishlist.has(game.appid) ? '★ On wishlist' : '☆ Add to wishlist'}</button>
         </div>
 
         <div class="livebox">
@@ -424,8 +601,8 @@ export async function appView(root, ctx, appid) {
         <div class="factbox">
           ${factRow('Platforms', platformsHtml(game.platforms) || '—')}
           ${factRow('Release', esc(game.releaseDate || 'Unannounced'))}
-          ${factRow('Developer', esc((game.developers || []).join(', ')))}
-          ${factRow('Publisher', esc((game.publishers || []).join(', ')))}
+          ${factRow('Developer', creatorLinks(game.developers, 'developer'))}
+          ${factRow('Publisher', creatorLinks(game.publishers, 'publisher'))}
           ${factRow('Reviews', game.recommendations ? `${formatNumber(game.recommendations)} recommendations` : '')}
           ${factRow('Metacritic', game.metacritic ? `<a href="${escAttr(game.metacriticUrl || '#')}" target="_blank" rel="noopener noreferrer">${esc(game.metacritic)}</a>` : '')}
           ${factRow('Website', game.website ? `<a href="${escAttr(game.website)}" target="_blank" rel="noopener noreferrer">Official site</a>` : '')}
@@ -472,7 +649,26 @@ export async function appView(root, ctx, appid) {
       panel.hidden = panel.id !== `tab-${button.dataset.tab}`;
     });
     if (button.dataset.tab === 'dlc') loadDlc();
+    if (button.dataset.tab === 'stats') loadStats();
   });
+
+  /* — wishlist button — */
+  bindItemActions(root, () => game);
+
+  /* — SteamDB-style stats (lazy) — */
+  let statsLoaded = false;
+  async function loadStats() {
+    if (statsLoaded) return;
+    statsLoaded = true;
+    const body = $('#stats-body', root);
+    try {
+      const spy = await ctx.relay.request('steamspy', { appid: id });
+      body.innerHTML = statsHtml(spy, game);
+    } catch {
+      // SteamSpy is frequently slow or down; the SteamDB links still help.
+      body.innerHTML = statsHtml(null, game);
+    }
+  }
 
   /* — reviews — */
   let cursor = payload.reviews?.cursor || null;
@@ -558,22 +754,25 @@ export async function appView(root, ctx, appid) {
 
 const LIBRARY_KEY = 'steam-viewer:last-profile';
 
-export async function libraryView(root, ctx) {
+export async function libraryView(root, ctx, who = '') {
   ctx.setTitle('Library · Steam Viewer');
 
-  const supported = ctx.relay.capabilities ? ctx.relay.capabilities.library !== false : true;
-  const remembered = localStorage.getItem(LIBRARY_KEY) || '';
+  const requested = decodeURIComponent(who || '');
+  const remembered = requested || localStorage.getItem(LIBRARY_KEY) || '';
 
   const form = `
     <div class="empty">
       <h2>Look up a Steam library</h2>
       <p>Enter a SteamID64, a custom profile name, or a full <code>steamcommunity.com</code> URL.</p>
-      ${supported ? '' : '<p style="color:#c15755;margin-top:10px">This relay has no <code>STEAM_API_KEY</code> set, so profile lookups are disabled. Add the key in Render and redeploy.</p>'}
       <form class="formrow" id="library-form">
-        <input type="text" id="library-input" placeholder="76561197960287930 or gabelogannewell" value="${escAttr(remembered)}" ${supported ? '' : 'disabled'} />
-        <button class="btn btn--green" type="submit" ${supported ? '' : 'disabled'}>Load library</button>
+        <input type="text" id="library-input" placeholder="76561197960287930 or gabelogannewell" value="${escAttr(remembered)}" />
+        <button class="btn btn--green" type="submit">Load library</button>
       </form>
-      <p class="loading-note">The profile's game details must be public for Steam to return them.</p>
+      <p class="loading-note">
+        No sign-in needed — public profiles are read straight from Steam Community.
+        Don't know the exact name? <a href="#/users">Search for a profile</a>.
+      </p>
+      <p class="loading-note">The profile's game details must be public for Steam to list them.</p>
     </div>`;
 
   root.innerHTML = form;
@@ -588,7 +787,7 @@ export async function libraryView(root, ctx) {
 
   $('#library-form', root)?.addEventListener('submit', submit);
 
-  if (remembered && supported) await loadLibrary(root, ctx, remembered);
+  if (remembered) await loadLibrary(root, ctx, remembered);
 }
 
 async function loadLibrary(root, ctx, who) {
@@ -635,6 +834,18 @@ async function loadLibrary(root, ctx, who) {
             body: data.recent.map((game) => portraitCardHtml(game, { subtitle: formatPlaytime(game.playtime2Weeks || game.playtimeForever) })).join(''),
           })
         : ''
+    }
+
+    ${
+      data.libraryError
+        ? `<p class="loading-note" style="text-align:left">${esc(data.libraryError)}</p>`
+        : `<section class="section">
+             <div class="section__head">
+               <h2 class="section__title">Account Value<small>SteamDB-style calculator</small></h2>
+               <a class="section__link" href="https://steamdb.info/calculator/${escAttr(data.steamid)}/" target="_blank" rel="noopener noreferrer">Open on SteamDB &rsaquo;</a>
+             </div>
+             <div id="calc-body"><p class="loading-note">Pricing ${formatNumber(data.games.length)} games…</p></div>
+           </section>`
     }
 
     <section class="section">
@@ -688,6 +899,394 @@ async function loadLibrary(root, ctx, who) {
 
   paint();
   attachImageFallbacks(root);
+
+  /* Account value — a lot of price lookups, so it lands after the grid. */
+  const calcBody = $('#calc-body', root);
+  if (calcBody) {
+    ctx.relay
+      .request('calculator', { id: data.steamid, cc: ctx.region, l: ctx.language }, { timeoutMs: 90_000 })
+      .then((calc) => {
+        const money = (minor) => formatMoney(minor, calc.currency);
+        calcBody.innerHTML = `<div class="stats">
+            <div class="stats__tile"><b>${money(calc.valueAtFullPrice)}</b><span>Value at full price</span></div>
+            <div class="stats__tile"><b>${money(calc.valueAtCurrentPrice)}</b><span>At today's prices</span></div>
+            <div class="stats__tile"><b>${calc.costPerHourMinor === null ? '—' : money(calc.costPerHourMinor)}</b><span>Per hour played</span></div>
+            <div class="stats__tile"><b>${formatNumber(calc.playtimeHours)}</b><span>Hours played</span></div>
+            <div class="stats__tile"><b>${calc.playedPercent}%</b><span>Games played</span></div>
+            <div class="stats__tile"><b>${formatNumber(calc.neverPlayed)}</b><span>Never played</span></div>
+            <div class="stats__tile"><b>${formatNumber(calc.priced)}</b><span>Paid titles</span></div>
+            <div class="stats__tile"><b>${formatNumber(calc.free)}</b><span>Free titles</span></div>
+          </div>
+          <p class="loading-note" style="text-align:left">
+            Priced in ${esc(calc.currency)} for the ${esc(ctx.region.toUpperCase())} store${calc.truncated ? `, over the first ${formatNumber(calc.gamesConsidered)} of ${formatNumber(calc.gamesTotal)} games` : ''}.
+            ${calc.unknown ? `${formatNumber(calc.unknown)} titles have no current store page.` : ''}
+          </p>`;
+      })
+      .catch((error) => {
+        calcBody.innerHTML = `<p class="loading-note" style="text-align:left">Could not price this library: ${esc(error.message)}</p>`;
+      });
+  }
+}
+
+/* ================================================================== *
+ * Wishlist (this browser only)
+ * ================================================================== */
+
+export function wishlistView(root, ctx) {
+  ctx.setTitle('Wishlist · Steam Viewer');
+
+  const paint = () => {
+    const items = wishlist.all();
+    root.innerHTML = `
+      <div class="breadcrumbs"><a href="#/">Store</a> &rsaquo; Wishlist</div>
+      <h1 class="apphead__title" style="margin-bottom:6px">Your wishlist</h1>
+      <p class="loading-note" style="text-align:left;margin:0 0 16px">
+        Saved in this browser — no Steam sign-in, and nothing leaves your device.
+        ${items.length ? 'It also tunes the “Recommended For You” rows on the home page.' : ''}
+      </p>
+
+      <div class="toolbar">
+        <button class="btn btn--ghost btn--sm" type="button" id="wl-export" ${items.length ? '' : 'disabled'}>Export</button>
+        <button class="btn btn--ghost btn--sm" type="button" id="wl-import">Import</button>
+        <button class="btn btn--ghost btn--sm" type="button" id="wl-clear" ${items.length ? '' : 'disabled'}>Clear all</button>
+        <input type="file" id="wl-file" accept="application/json" hidden />
+        ${wishlist.ignoredIds().length ? `<button class="btn btn--ghost btn--sm" type="button" id="wl-unignore">Un-hide ${wishlist.ignoredIds().length} ignored</button>` : ''}
+      </div>
+
+      ${
+        items.length
+          ? sectionHtml({ title: 'Saved games', note: `${items.length} title${items.length === 1 ? '' : 's'}`, body: cardsHtml(items, cardOpts()) })
+          : `<div class="empty">
+               <h2>Nothing saved yet</h2>
+               <p>Press ☆ on any game to keep it here.</p>
+               <p style="margin-top:16px"><a class="btn btn--green" href="#/">Browse the store</a></p>
+             </div>`
+      }`;
+
+    attachImageFallbacks(root);
+    attachHoverPreviews(root);
+
+    $('#wl-export', root)?.addEventListener('click', () => {
+      const blob = new Blob([wishlist.exportJson()], { type: 'application/json' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'steam-viewer-wishlist.json';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    });
+
+    $('#wl-import', root)?.addEventListener('click', () => $('#wl-file', root).click());
+    $('#wl-file', root)?.addEventListener('change', async (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      try {
+        const added = wishlist.importJson(await file.text());
+        toast(`Imported ${added} game${added === 1 ? '' : 's'}`, 'ok');
+        paint();
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+    });
+
+    $('#wl-clear', root)?.addEventListener('click', () => {
+      wishlist.clear();
+      toast('Wishlist cleared', 'ok');
+      paint();
+    });
+
+    $('#wl-unignore', root)?.addEventListener('click', () => {
+      for (const appid of wishlist.ignoredIds()) wishlist.unignore(appid);
+      toast('Ignored games restored', 'ok');
+      paint();
+    });
+
+    bindItemActions(root, (appid) => items.find((item) => item.appid === appid));
+  };
+
+  paint();
+  return wishlist.onChange(() => {
+    // Only repaint when the change came from somewhere else (another tab).
+    if (!root.isConnected) return;
+  });
+}
+
+/* ================================================================== *
+ * Developer / publisher pages
+ * ================================================================== */
+
+export async function creatorView(root, ctx, role, name) {
+  const creator = decodeURIComponent(name || '');
+  const label = role === 'publisher' ? 'Publisher' : 'Developer';
+  ctx.setTitle(`${creator} · Steam Viewer`);
+  root.innerHTML = `<div class="breadcrumbs"><a href="#/">Store</a> &rsaquo; ${esc(creator)}</div>${skeletonGrid(8)}`;
+
+  let data;
+  try {
+    data = await ctx.relay.request('creator', { name: creator, role, cc: ctx.region, l: ctx.language });
+  } catch (error) {
+    root.innerHTML = errorHtml(error);
+    bindRetry(root, () => creatorView(root, ctx, role, name));
+    return;
+  }
+
+  const catalogue = data.catalogue || [];
+  const genres = [...new Set(catalogue.flatMap((item) => item.genres || []))].slice(0, 10);
+  const rated = catalogue.filter((item) => item.metacritic);
+  const averageScore = rated.length ? Math.round(rated.reduce((sum, item) => sum + item.metacritic, 0) / rated.length) : null;
+
+  root.innerHTML = `
+    <div class="breadcrumbs"><a href="#/">Store</a> &rsaquo; ${esc(label)} &rsaquo; ${esc(data.name)}</div>
+
+    <div class="profilecard">
+      <div>
+        <div class="profilecard__name">${esc(data.name)}</div>
+        <div class="profilecard__meta">${esc(label)} on Steam</div>
+      </div>
+      <div class="profilecard__stats">
+        <div class="profilecard__stat"><b>${formatNumber(data.total || catalogue.length)}</b><span>Titles</span></div>
+        ${averageScore ? `<div class="profilecard__stat"><b>${averageScore}</b><span>Avg Metacritic</span></div>` : ''}
+      </div>
+    </div>
+
+    ${genres.length ? `<div style="margin-bottom:18px">${genres.map((genre) => `<a class="chip" href="#/genre/${encodeURIComponent(genre)}">${esc(genre)}</a>`).join('')}</div>` : ''}
+
+    ${(data.sections || []).map((section) => sectionHtml({ title: section.label, body: cardsHtml(visible(section.items), cardOpts()) })).join('')}
+
+    <p class="loading-note" style="text-align:left">
+      <a href="https://store.steampowered.com/search/?${role}=${encodeURIComponent(data.name)}" target="_blank" rel="noopener noreferrer">
+        See every ${esc(label.toLowerCase())} title on Steam &rsaquo;
+      </a>
+    </p>`;
+
+  attachImageFallbacks(root);
+  attachHoverPreviews(root);
+  bindItemActions(root, (appid) => catalogue.find((item) => item.appid === appid));
+}
+
+/* ================================================================== *
+ * Find people
+ * ================================================================== */
+
+export async function usersView(root, ctx, query) {
+  const term = decodeURIComponent(query || '');
+  ctx.setTitle('Find people · Steam Viewer');
+
+  const form = `
+    <div class="breadcrumbs"><a href="#/">Store</a> &rsaquo; Find people</div>
+    <h1 class="apphead__title" style="margin-bottom:6px">Find a Steam profile</h1>
+    <p class="loading-note" style="text-align:left;margin:0 0 12px">
+      Search by persona name, or paste a SteamID64, a custom URL name, or a full
+      <code>steamcommunity.com</code> link. No sign-in needed — public profiles only.
+    </p>
+    <form class="formrow" id="users-form" style="justify-content:flex-start">
+      <input type="text" id="users-input" placeholder="zdstudio12345" value="${escAttr(term)}" />
+      <button class="btn btn--green" type="submit">Search</button>
+    </form>
+    <div id="users-results"></div>`;
+
+  root.innerHTML = form;
+
+  const results = $('#users-results', root);
+
+  const run = async (text) => {
+    if (!text) return;
+    results.innerHTML = '<p class="loading-note">Searching Steam Community…</p>';
+    try {
+      const data = await ctx.relay.request('usersearch', { text });
+      if (!data.results?.length) {
+        results.innerHTML = `<div class="empty"><h2>No profiles matched “${esc(text)}”</h2>
+          <p>Try the exact custom URL name, or paste the profile link.</p></div>`;
+        return;
+      }
+
+      results.innerHTML = `<section class="section">
+        <div class="section__head"><h2 class="section__title">Profiles<small>${formatNumber(data.total)} found</small></h2></div>
+        <div class="grid grid--wide">
+          ${data.results
+            .map(
+              (person) => `<a class="usercard" href="#/library/${encodeURIComponent(person.lookup || person.steamid || '')}">
+                  <img src="${escAttr(person.avatar || '')}" alt="" loading="lazy" />
+                  <div>
+                    <div class="usercard__name">${esc(person.name)}</div>
+                    <div class="usercard__id">${esc(person.steamid || '')}</div>
+                  </div>
+                </a>`,
+            )
+            .join('')}
+        </div>
+        ${data.degraded ? '<p class="loading-note">Community search was unavailable, so this is a direct profile match.</p>' : ''}
+      </section>`;
+      attachImageFallbacks(results);
+    } catch (error) {
+      results.innerHTML = errorHtml(error);
+      bindRetry(results, () => run(text));
+    }
+  };
+
+  $('#users-form', root).addEventListener('submit', (event) => {
+    event.preventDefault();
+    const value = $('#users-input', root).value.trim();
+    if (value) window.location.hash = `#/users/${encodeURIComponent(value)}`;
+  });
+
+  if (term) await run(term);
+}
+
+/* ================================================================== *
+ * Remote play
+ * ================================================================== */
+
+const AGENT_KEY = 'steam-viewer:agent-code';
+
+export async function playView(root, ctx) {
+  ctx.setTitle('Remote Play · Steam Viewer');
+  const saved = localStorage.getItem(AGENT_KEY) || '';
+
+  root.innerHTML = `
+    <div class="breadcrumbs"><a href="#/">Store</a> &rsaquo; Remote Play</div>
+    <h1 class="apphead__title" style="margin-bottom:6px">Remote Play</h1>
+    <p class="loading-note" style="text-align:left;margin:0 0 14px">
+      Run <strong>Steam Viewer Agent</strong> on your gaming PC and pair it here. The site can then list the games you
+      actually have installed and start them on that machine — no Steam password involved, and nothing to port-forward.
+    </p>
+
+    <form class="formrow" id="agent-form" style="justify-content:flex-start">
+      <input type="text" id="agent-code" placeholder="Pairing code (e.g. K7QM2XPD)" value="${escAttr(saved)}" maxlength="16" style="text-transform:uppercase" />
+      <button class="btn btn--green" type="submit">Connect</button>
+      ${saved ? '<button class="btn btn--ghost" type="button" id="agent-forget">Forget</button>' : ''}
+    </form>
+
+    <div id="agent-body">
+      <div class="empty" style="margin-top:20px">
+        <h2>Not paired yet</h2>
+        <p style="max-width:620px;margin:0 auto">On the PC that has your games:</p>
+        <pre class="setup">git clone this repo
+cd steam-viewer/agent
+npm install
+npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.com')}</pre>
+        <p>It prints a pairing code — type that above.</p>
+        <p class="loading-note" style="max-width:620px;margin:14px auto 0">
+          Streaming the picture into this page is not something a browser can do: neither Moonlight's GameStream
+          protocol nor Steam Link has a web client. If you install
+          <a href="https://app.lizardbyte.dev/Sunshine/" target="_blank" rel="noopener noreferrer">Sunshine</a> on the PC and
+          <a href="https://moonlight-stream.org/" target="_blank" rel="noopener noreferrer">Moonlight</a> on this device, the
+          agent detects it and the Stream button hands off to Moonlight already pointed at your PC.
+        </p>
+      </div>
+    </div>`;
+
+  const body = $('#agent-body', root);
+
+  const connect = async (code) => {
+    body.innerHTML = '<p class="loading-note">Contacting your PC…</p>';
+    try {
+      const data = await ctx.relay.request('agent', { code, op: 'games' });
+      localStorage.setItem(AGENT_KEY, code);
+      renderAgent(data, code);
+    } catch (error) {
+      body.innerHTML = errorHtml(error, { retryLabel: 'Try again' });
+      bindRetry(body, () => connect(code));
+    }
+  };
+
+  const renderAgent = (data, code) => {
+    const games = data.games || [];
+    const streaming = data.streaming || { available: false };
+
+    body.innerHTML = `
+      <div class="profilecard" style="margin-top:18px">
+        <div>
+          <div class="profilecard__name">${esc(data.host || 'Your PC')}</div>
+          <div class="profilecard__meta">
+            Paired as <code>${esc(code)}</code> ·
+            ${streaming.available ? 'Sunshine detected — streaming available' : 'no streaming host detected'}
+          </div>
+        </div>
+        <div class="profilecard__stats">
+          <div class="profilecard__stat"><b>${formatNumber(games.length)}</b><span>Installed</span></div>
+        </div>
+      </div>
+
+      ${
+        streaming.available
+          ? `<div class="buybox" style="margin-bottom:16px">
+               <span class="buybox__label">Stream this PC</span>
+               <a class="btn btn--green" href="${escAttr(streaming.moonlightUrl || '#')}">Open in Moonlight</a>
+               ${streaming.sunshineWebUi ? `<a class="btn btn--ghost" href="${escAttr(streaming.sunshineWebUi)}" target="_blank" rel="noopener noreferrer">Sunshine settings</a>` : ''}
+             </div>`
+          : `<p class="loading-note" style="text-align:left">${esc(streaming.note || 'Streaming is not set up on that PC.')}</p>`
+      }
+
+      <div class="toolbar">
+        <input type="search" id="agent-filter" placeholder="filter installed games" />
+        <button class="btn btn--ghost btn--sm" type="button" id="agent-refresh">Rescan library</button>
+      </div>
+
+      <div class="grid grid--portrait" id="agent-grid"></div>`;
+
+    const grid = $('#agent-grid', body);
+    const filter = $('#agent-filter', body);
+
+    const paint = () => {
+      const term = filter.value.trim().toLowerCase();
+      const shown = games.filter((game) => !term || game.name.toLowerCase().includes(term));
+      grid.innerHTML =
+        shown
+          .map(
+            (game) => `<div class="installed">
+                ${portraitCardHtml({ appid: game.appid, name: game.name }, { subtitle: game.fullyInstalled ? 'installed' : 'downloading' })}
+                <button class="btn btn--green btn--sm" type="button" data-launch="${game.appid}">▶ Play on PC</button>
+              </div>`,
+          )
+          .join('') || '<p class="loading-note">No installed games match that filter.</p>';
+      attachImageFallbacks(grid);
+    };
+
+    filter.addEventListener('input', paint);
+    paint();
+
+    grid.addEventListener('click', async (event) => {
+      const button = event.target.closest('[data-launch]');
+      if (!button) return;
+      const appid = Number(button.dataset.launch);
+      button.disabled = true;
+      button.textContent = 'Launching…';
+      try {
+        const result = await ctx.relay.request('agent', { code, op: 'launch', appid });
+        toast(`${result.name} is starting on ${data.host}`, 'ok');
+        if (streaming.available && streaming.moonlightUrl) {
+          toast('Open Moonlight to watch it', 'info', 6000);
+        }
+      } catch (error) {
+        toast(error.message, 'error', 7000);
+      } finally {
+        button.disabled = false;
+        button.textContent = '▶ Play on PC';
+      }
+    });
+
+    $('#agent-refresh', body).addEventListener('click', async () => {
+      try {
+        await ctx.relay.request('agent', { code, op: 'refresh' });
+        await connect(code);
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+    });
+  };
+
+  $('#agent-form', root).addEventListener('submit', (event) => {
+    event.preventDefault();
+    const code = $('#agent-code', root).value.trim().toUpperCase();
+    if (code) connect(code);
+  });
+
+  $('#agent-forget', root)?.addEventListener('click', () => {
+    localStorage.removeItem(AGENT_KEY);
+    playView(root, ctx);
+  });
+
+  if (saved) await connect(saved);
 }
 
 /* ================================================================== *
@@ -718,11 +1317,52 @@ export function aboutView(root, ctx) {
       <h2>What you can do here</h2>
       <ul>
         <li>Search the whole Steam catalogue, with suggestions as you type.</li>
-        <li>Browse top sellers, new releases, specials, coming soon and the live most-played chart.</li>
-        <li>Open any game for trailers, screenshots, the full store description, tags, system requirements, achievements, DLC, news and reviews.</li>
+        <li>Browse top sellers, new releases, specials, coming soon, genres and the live most-played chart.</li>
+        <li>Open any game for trailers, screenshots, the full store description, tags, system requirements,
+            achievements, DLC, news, reviews and ownership stats.</li>
+        <li>Open a developer or publisher to see everything they have shipped.</li>
+        <li>Keep a <a href="#/wishlist">wishlist</a> in this browser — it needs no Steam sign-in and it tunes the
+            “Recommended For You” rows on the home page.</li>
+        <li>Look up <a href="#/library">any public Steam profile</a> and value its library, with no sign-in from you
+            or the profile's owner.</li>
+        <li>Pair your gaming PC under <a href="#/play">Remote Play</a> to list and launch your installed games.</li>
         <li>Switch store region to see local pricing.</li>
-        <li>Look up any public Steam library (requires a <code>STEAM_API_KEY</code> on the relay).</li>
       </ul>
+
+      <h2>Where the numbers come from</h2>
+      <p>
+        Store data, prices, reviews, player counts and the most-played chart come from Steam's own public endpoints.
+        Ownership and playtime estimates come from SteamSpy. The account-value calculator is computed here from
+        Steam's bulk price API against the profile's library.
+      </p>
+      <p>
+        SteamDB is <em>linked</em>, never scraped — it sits behind bot protection and its terms do not allow it. Every
+        stats panel has direct links to the matching SteamDB app, charts, price-history and calculator pages.
+      </p>
+
+      <h2>Profiles without signing in</h2>
+      <p>
+        Every public Steam profile still serves the legacy community XML documents, so the relay reads profiles and
+        libraries from <code>steamcommunity.com/id/&lt;name&gt;/?xml=1</code>. Nobody has to log in. If the relay
+        happens to have a <code>STEAM_API_KEY</code>, it uses the Web API instead for richer data. A profile whose game
+        details are set to private cannot be read either way — that is Steam's setting, not a limitation here.
+      </p>
+
+      <h2>Remote play, honestly</h2>
+      <p>
+        The <a href="#/play">agent</a> you run on your PC reads your installed games from Steam's own manifest files and
+        can start any of them with a <code>steam://</code> link. It never sees your Steam password, and it dials out to
+        the relay so nothing needs port-forwarding.
+      </p>
+      <p>
+        <strong>The video does not stream into this page.</strong> Moonlight's GameStream protocol and Steam's Remote
+        Play protocol have no browser client, and Valve ships no web SDK for Steam Link — re-implementing either over
+        WebRTC is a separate project. What works instead: install
+        <a href="https://app.lizardbyte.dev/Sunshine/" target="_blank" rel="noopener noreferrer">Sunshine</a> on the PC,
+        and the Stream button hands off to your native
+        <a href="https://moonlight-stream.org/" target="_blank" rel="noopener noreferrer">Moonlight</a> client already
+        pointed at the right machine, with the game already starting.
+      </p>
       <h2>Keyboard</h2>
       <ul>
         <li><strong>/</strong> — jump to search</li>

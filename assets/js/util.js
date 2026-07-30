@@ -123,27 +123,36 @@ export function plainText(html, limit = 260) {
  * Misc
  * ------------------------------------------------------------------ */
 
-/** Swap in a placeholder when a Steam CDN asset 404s (common for old apps). */
+/** Move an image on to the next candidate URL in its fallback chain. */
+function advanceImage(img) {
+  const remaining = (img.dataset.fallback || '').split('|').filter(Boolean);
+  const candidate = remaining.shift();
+  img.dataset.fallback = remaining.join('|');
+
+  if (candidate) {
+    img.src = candidate;
+    return;
+  }
+  img.removeAttribute('src');
+  img.classList.add('is-missing');
+  img.parentElement?.classList.add('has-missing-image');
+}
+
+/**
+ * Swap in the next CDN candidate when a Steam asset 404s — common for older
+ * apps, and for art Valve has moved between hosts.
+ */
 export function attachImageFallbacks(root = document) {
   for (const img of $$('img[data-fallback]', root)) {
     if (img.dataset.fallbackBound) continue;
     img.dataset.fallbackBound = '1';
-    img.addEventListener(
-      'error',
-      () => {
-        const next = (img.dataset.fallback || '').split('|').filter(Boolean);
-        const candidate = next.shift();
-        img.dataset.fallback = next.join('|');
-        if (candidate) {
-          img.src = candidate;
-        } else {
-          img.removeAttribute('src');
-          img.classList.add('is-missing');
-          img.parentElement?.classList.add('has-missing-image');
-        }
-      },
-      { once: false },
-    );
+    img.addEventListener('error', () => advanceImage(img));
+
+    // The browser starts loading as soon as innerHTML is assigned, which is
+    // before this listener exists. Anything that already failed (or was given
+    // an empty src) has to be caught by hand.
+    if (!img.getAttribute('src')) advanceImage(img);
+    else if (img.complete && img.naturalWidth === 0) advanceImage(img);
   }
 }
 

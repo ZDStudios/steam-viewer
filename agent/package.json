@@ -1,0 +1,19 @@
+{
+  "name": "steam-viewer-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Runs on your gaming PC so the Steam Viewer site can list and launch your installed games.",
+  "type": "module",
+  "bin": {
+    "steam-viewer-agent": "src/index.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

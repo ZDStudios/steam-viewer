@@ -1811,3 +1811,250 @@ a.chip:hover {
     scroll-behavior: auto !important;
   }
 }
+
+/* =====================================================================
+   Wishlist controls, discovery rows, stats, people, remote play
+   ===================================================================== */
+
+.navcount {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  margin-left: 4px;
+  border-radius: 9px;
+  background: var(--blue-2);
+  color: #fff;
+  font-size: 11px;
+  line-height: 17px;
+  text-align: center;
+}
+
+/* ☆ overlay on a store card */
+.card__wish {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #b9c7d2;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease;
+}
+.card:hover .card__wish,
+.card__wish:focus-visible,
+.card__wish.is-on {
+  opacity: 1;
+}
+.card__wish:hover {
+  color: #fff;
+  background: rgba(0, 0, 0, 0.8);
+}
+.card__wish.is-on {
+  color: var(--gold);
+}
+
+/* Microtrailer that plays over the capsule on hover */
+.card__preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+  animation: fadein 0.25s ease;
+}
+.card__shot {
+  background: linear-gradient(135deg, #2a475e, #10161f);
+}
+
+/* Discovery-queue row */
+.disco {
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.15));
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 18px;
+}
+.disco__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.disco__title {
+  display: block;
+  font-size: 22px;
+  font-weight: 300;
+  color: #fff;
+}
+.disco__reason {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.disco__reason strong {
+  color: var(--blue);
+  font-weight: 400;
+}
+.disco__actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.disco__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 10px;
+}
+.disco__hero {
+  display: block;
+  border-radius: 2px;
+  overflow: hidden;
+  background: #000;
+}
+.disco__hero img {
+  width: 100%;
+  aspect-ratio: 616 / 353;
+  object-fit: cover;
+}
+.disco__shots {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-content: start;
+}
+.disco__shot {
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  overflow: hidden;
+  background: #000;
+  cursor: pointer;
+  line-height: 0;
+}
+.disco__shot img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  transition: transform 0.2s ease;
+}
+.disco__shot:hover img {
+  transform: scale(1.05);
+}
+.disco__foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 12px;
+}
+.disco__tags {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* Stat tiles (game stats + account value) */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+.stats__tile {
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.stats__tile b {
+  display: block;
+  font-size: 20px;
+  font-weight: 300;
+  color: var(--blue);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.stats__tile span {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.chip small {
+  opacity: 0.6;
+  font-size: 10px;
+}
+
+/* Profile search results */
+.usercard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: var(--radius);
+  color: var(--text);
+  transition: background 0.15s ease;
+}
+.usercard:hover {
+  background: var(--blue-2);
+  color: #fff;
+}
+.usercard img {
+  width: 48px;
+  height: 48px;
+  border-radius: 3px;
+  background: #000;
+  flex: none;
+}
+.usercard__name {
+  color: #fff;
+  font-size: 15px;
+}
+.usercard__id {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Remote play */
+.setup {
+  display: inline-block;
+  text-align: left;
+  background: #0b1218;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin: 14px auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--green);
+  overflow-x: auto;
+  max-width: 100%;
+}
+.installed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.installed .btn {
+  justify-content: center;
+}
+
+@media (max-width: 760px) {
+  .disco__body {
+    grid-template-columns: 1fr;
+  }
+  .disco__shots {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
