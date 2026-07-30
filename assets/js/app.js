@@ -2,7 +2,20 @@
 import { normalizeBase, Relay } from './client.js';
 import { toast } from './components.js';
 import { $, $$, attachImageFallbacks, debounce, esc, escAttr, formatMoney, REGIONS, scrollToTop } from './util.js';
-import { aboutView, appView, browseView, genreView, homeView, libraryView, searchView } from './views.js';
+import {
+  aboutView,
+  appView,
+  browseView,
+  developerView,
+  genresView,
+  genreView,
+  homeView,
+  libraryView,
+  remotePlayView,
+  searchView,
+  wishlistView,
+} from './views.js';
+import { wishlist } from './wishlist.js';
 
 const CONFIG = window.STEAM_VIEWER_CONFIG || {};
 const LS = {
@@ -295,13 +308,36 @@ function parseHash() {
 }
 
 function markActiveNav(path) {
-  const map = { '': 'home', search: 'home', app: 'home', genre: 'home', browse: 'charts', library: 'library', about: 'about' };
+  const map = {
+    '': 'home',
+    search: 'home',
+    app: 'home',
+    genre: 'home',
+    genres: 'home',
+    developer: 'home',
+    publisher: 'home',
+    browse: 'charts',
+    library: 'library',
+    wishlist: 'wishlist',
+    remote: 'remote',
+    about: 'about',
+  };
   const active = path === 'browse' && parseHash().arg !== 'mostplayed' ? 'home' : map[path] || 'home';
   $$('.topbar__nav a').forEach((link) => link.classList.toggle('is-active', link.dataset.nav === active));
 
   const sub = path === '' ? 'home' : path === 'browse' ? parseHash().arg : '';
   $$('.storenav__links a').forEach((link) => link.classList.toggle('is-active', link.dataset.sub === sub));
 }
+
+/* Wishlist counter in the header */
+const wishCountNode = $('#wish-count');
+function paintWishCount() {
+  if (!wishCountNode) return;
+  wishCountNode.textContent = wishlist.count ? String(wishlist.count) : '';
+  wishCountNode.hidden = wishlist.count === 0;
+}
+wishlist.on(paintWishCount);
+paintWishCount();
 
 async function route(force = false) {
   const { path, arg } = parseHash();
@@ -319,7 +355,11 @@ async function route(force = false) {
   markActiveNav(path);
   scrollToTop();
 
-  if (!relay.configured) {
+  // A few screens are entirely local — the wishlist lives in this browser and
+  // Remote Play talks to the visitor's own PC — so they work with no relay.
+  const RELAY_FREE = new Set(['wishlist', 'remote', 'about', 'genres']);
+
+  if (!relay.configured && !RELAY_FREE.has(path)) {
     main.innerHTML = welcomeHtml();
     $('#welcome-configure')?.addEventListener('click', () => openSettings());
     return;
@@ -341,11 +381,26 @@ async function route(force = false) {
       case 'genre':
         result = await genreView(main, ctx, arg);
         break;
+      case 'genres':
+        result = genresView(main, ctx);
+        break;
+      case 'developer':
+        result = await developerView(main, ctx, arg, 'developer');
+        break;
+      case 'publisher':
+        result = await developerView(main, ctx, arg, 'publisher');
+        break;
       case 'browse':
         result = await browseView(main, ctx, arg);
         break;
       case 'library':
-        result = await libraryView(main, ctx);
+        result = await libraryView(main, ctx, arg ? decodeURIComponent(arg) : '');
+        break;
+      case 'wishlist':
+        result = wishlistView(main, ctx);
+        break;
+      case 'remote':
+        result = await remotePlayView(main, ctx);
         break;
       case 'about':
         result = aboutView(main, ctx);

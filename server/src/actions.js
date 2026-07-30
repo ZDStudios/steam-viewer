@@ -53,15 +53,45 @@ export const ACTIONS = {
       const enrichment = await steam.getAppsLite({ appids: hero.map((item) => item.appid), cc, l }).catch(() => []);
       const byId = new Map(enrichment.map((item) => [item.appid, item]));
 
+      /*
+       * One `seen` set walks every section in display order, so a title that
+       * has already appeared upstairs never shows up again further down the
+       * page. The carousel claims first, then the merchandising rows.
+       * `mostPlayed` is deliberately exempt: it is a chart, and a chart with
+       * holes punched in it is not a chart.
+       */
+      const seen = new Set();
+      const featuredCards = steam.dedupeItems(
+        hero.map((item) => {
+          const extra = byId.get(item.appid);
+          return extra ? { ...item, ...extra, price: item.price || extra.price } : item;
+        }),
+        { seen },
+      );
+
+      const specials = steam.dedupeItems(categories.specials, { seen });
+      const topSellers = steam.dedupeItems(categories.topSellers, { seen });
+      const newReleases = steam.dedupeItems(categories.newReleases, { seen });
+      const comingSoon = steam.dedupeItems(categories.comingSoon, { seen });
+
+      // Extra front-page shelves, each cheap because they reuse the lite cache.
+      const [freeToPlay, underTen] = await Promise.all([
+        steam.searchStore({ cc, l, limit: 8, genre: 'Free to Play', filter: 'topsellers' }).catch(() => []),
+        steam.searchStore({ cc, l, limit: 8, maxprice: 10, specials: true }).catch(() => []),
+      ]);
+
       return {
         cc,
         l,
-        featured: hero.map((item) => {
-          const extra = byId.get(item.appid);
-          return extra ? { ...item, shortDescription: extra.shortDescription, genres: extra.genres, price: item.price || extra.price } : item;
-        }),
-        ...categories,
-        mostPlayed,
+        featured: featuredCards,
+        specials,
+        topSellers,
+        newReleases,
+        comingSoon,
+        mostPlayed: steam.dedupeItems(mostPlayed, { seen: new Set() }),
+        freeToPlay: steam.dedupeItems(freeToPlay, { seen }),
+        underTen: steam.dedupeItems(underTen, { seen }),
+        genres: steam.GENRES,
       };
     },
   },
@@ -158,11 +188,83 @@ export const ACTIONS = {
     run: (p) => steam.getNews({ appid: appid(p.appid), count: Math.min(Number(p.count) || 8, 20) }),
   },
 
-  /** Requires STEAM_API_KEY on the server. */
+  /**
+   * A ranked slice of the catalogue. This is the store's own search backend,
+   * so it is the one place genre / developer / price filters actually work.
+   */
+  browse: {
+    ttl: TTL.browse,
+    key: (p) =>
+      `browse:${str(p.genre).toLowerCase()}:${str(p.filter)}:${str(p.developer).toLowerCase()}:${str(p.publisher).toLowerCase()}:${
+        p.specials ? 1 : 0
+      }:${Number(p.maxprice) || 0}:${str(p.term).toLowerCase()}:${clampCc(p.cc)}:${clampLang(p.l)}:${Math.min(Number(p.limit) || 24, 30)}`,
+    run: (p) =>
+      steam.searchStore({
+        cc: clampCc(p.cc),
+        l: clampLang(p.l),
+        term: str(p.term).slice(0, 120) || undefined,
+        genre: str(p.genre) ? steam.canonicalGenre(str(p.genre)) : undefined,
+        developer: str(p.developer) || undefined,
+        publisher: str(p.publisher) || undefined,
+        filter: str(p.filter) || undefined,
+        specials: p.specials === true || p.specials === 'true' || p.specials === '1',
+        maxprice: Number(p.maxprice) > 0 ? Math.trunc(Number(p.maxprice)) : undefined,
+        limit: Math.min(Math.max(Number(p.limit) || 24, 1), 30),
+      }),
+  },
+
+  /** A developer or publisher page. */
+  developer: {
+    ttl: TTL.developer,
+    key: (p) => `dev:${str(p.role, 'developer')}:${str(p.name).toLowerCase()}:${clampCc(p.cc)}:${clampLang(p.l)}`,
+    run: (p) =>
+      steam.getStudio({
+        name: str(p.name).slice(0, 120),
+        role: str(p.role) === 'publisher' ? 'publisher' : 'developer',
+        cc: clampCc(p.cc),
+        l: clampLang(p.l),
+      }),
+  },
+
+  /**
+   * Find people by name — the index behind steamcommunity.com/search/users.
+   * No key, no login: anonymous visitors can look anybody up.
+   */
+  users: {
+    ttl: TTL.users,
+    key: (p) => `users:${str(p.text).toLowerCase()}:${Math.max(1, Number(p.page) || 1)}`,
+    run: (p) => {
+      const text = str(p.text).slice(0, 80);
+      if (!text) return [];
+      return steam.searchUsers({ text, page: Math.max(1, Number(p.page) || 1), limit: Math.min(Number(p.limit) || 20, 30) });
+    },
+  },
+
+  /** Profile + owned library. Works with or without STEAM_API_KEY. */
   profile: {
     ttl: TTL.profile,
-    key: (p) => `profile:${str(p.id).toLowerCase()}`,
+    key: (p) => `profile:${str(p.id).toLowerCase()}:${clampCc(p.cc)}`,
     run: (p) => steam.getProfile({ id: str(p.id), cc: clampCc(p.cc), l: clampLang(p.l) }),
+  },
+
+  /** SteamDB stats for one app, with a Steam-sourced fallback. */
+  steamdb: {
+    ttl: TTL.steamdb,
+    key: (p) => `steamdb:${appid(p.appid)}:${clampCc(p.cc)}`,
+    run: (p) => steam.getSteamDbApp({ appid: appid(p.appid), cc: clampCc(p.cc) }),
+  },
+
+  /** SteamDB's calculator figure for a profile, or ours if it will not answer. */
+  calculator: {
+    ttl: TTL.calculator,
+    key: (p) => `calc:${str(p.id).toLowerCase()}:${clampCc(p.cc)}`,
+    run: (p) =>
+      steam.getCalculator({
+        id: str(p.id),
+        cc: clampCc(p.cc),
+        l: clampLang(p.l),
+        sample: Math.min(Number(p.sample) || 100, 120),
+      }),
   },
 
   capabilities: {
@@ -170,7 +272,9 @@ export const ACTIONS = {
     key: () => 'capabilities',
     run: async () => ({
       actions: Object.keys(ACTIONS),
-      library: steam.hasApiKey(),
+      // Profiles no longer need a key — this now means "richer profile data".
+      library: true,
+      apiKey: steam.hasApiKey(),
       genres: steam.GENRES,
     }),
   },

@@ -1692,6 +1692,615 @@ a.chip:hover {
   align-items: center;
 }
 
+
+/* =====================================================================
+   Wishlist button — the heart on every capsule
+   ===================================================================== */
+
+.wishbtn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px;
+  border: 0;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-3px);
+  transition: opacity 0.15s ease, transform 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.wishbtn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+.card:hover .wishbtn,
+.pcard:hover .wishbtn,
+.railcard:hover .wishbtn,
+.wishbtn:focus-visible,
+.wishbtn.is-on {
+  opacity: 1;
+  transform: none;
+}
+.wishbtn:hover {
+  background: rgba(0, 0, 0, 0.8);
+  color: var(--blue);
+}
+.wishbtn.is-on {
+  color: #e05b5b;
+}
+.wishbtn.is-on:hover {
+  color: #ff7b7b;
+}
+.wishbtn--md {
+  position: static;
+  opacity: 1;
+  transform: none;
+  padding: 7px 12px;
+  font-size: 13px;
+}
+
+.btn--wide {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  text-align: center;
+}
+.btn.is-on {
+  border-color: rgba(224, 91, 91, 0.5);
+  color: #ff8f8f;
+}
+
+.navcount {
+  display: inline-block;
+  min-width: 17px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--blue-2);
+  color: #fff;
+  font-size: 10px;
+  line-height: 17px;
+  text-align: center;
+  vertical-align: text-top;
+}
+
+/* =====================================================================
+   Hover trailer preview
+   ===================================================================== */
+
+.card__preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+  z-index: 1;
+  animation: preview-in 0.25s ease both;
+}
+@keyframes preview-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* =====================================================================
+   Category tiles
+   ===================================================================== */
+
+.section--tiles .section__head {
+  margin-bottom: 12px;
+}
+.cattiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+.cattile {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  min-height: 78px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(0, 0, 0, 0.35)),
+    linear-gradient(160deg, var(--tint, #2b6a9c), #16202d 130%);
+  color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.cattile::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 120% at 100% 0%, rgba(255, 255, 255, 0.22), transparent 60%);
+  pointer-events: none;
+}
+.cattile:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 6px 18px rgba(0, 0, 0, 0.45);
+  color: #fff;
+}
+.cattile__label {
+  position: relative;
+  z-index: 1;
+  font-size: 15px;
+  letter-spacing: 0.4px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+/* =====================================================================
+   Rail cards (Special Offers strip)
+   ===================================================================== */
+
+.railcard {
+  display: block;
+  background: linear-gradient(180deg, #1a2c3e, #16202d);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.railcard:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+.railcard .card__shot {
+  position: relative;
+  aspect-ratio: 460 / 215;
+  overflow: hidden;
+}
+.railcard .card__shot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.railcard__cut {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  padding: 3px 8px;
+  background: var(--discount-bg);
+  color: var(--discount-text);
+  font-size: 15px;
+  font-weight: 600;
+}
+.railcard__name {
+  padding: 8px 10px 2px;
+  color: var(--text-bright);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.railcard__price {
+  padding: 0 10px 10px;
+}
+
+/* =====================================================================
+   Panels, chips, setup lists
+   ===================================================================== */
+
+.panel {
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+}
+.panel--split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 26px;
+}
+.panel__title {
+  color: var(--text-bright);
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+.panel__text {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 0 0 10px;
+  line-height: 1.6;
+}
+.panel .formrow {
+  justify-content: flex-start;
+}
+
+.chiprow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chip--warn {
+  background: rgba(193, 87, 85, 0.2);
+  color: #e58a88;
+}
+
+.setup {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.9;
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+
+/* =====================================================================
+   Studio (developer / publisher) pages
+   ===================================================================== */
+
+.studiohead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.studiohead__kicker {
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.studiohead__toggle {
+  display: flex;
+  gap: 8px;
+}
+
+/* =====================================================================
+   SteamDB stat blocks
+   ===================================================================== */
+
+.dbstats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.dbstat {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.dbstat b {
+  display: block;
+  font-size: 21px;
+  font-weight: 300;
+  color: var(--blue);
+}
+.dbstat span {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+/* =====================================================================
+   Wishlist page
+   ===================================================================== */
+
+.wishhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.wishhead__stats {
+  display: flex;
+  gap: 26px;
+}
+
+.wishrow {
+  display: grid;
+  grid-template-columns: 184px 1fr auto auto;
+  gap: 16px;
+  align-items: center;
+  padding: 10px;
+  margin-bottom: 8px;
+  background: linear-gradient(90deg, #1a2c3e, #16202d);
+  border-radius: var(--radius);
+}
+.wishrow__shot img {
+  width: 100%;
+  border-radius: 2px;
+}
+.wishrow__name {
+  display: block;
+  color: var(--text-bright);
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+.wishrow__meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.wishrow__actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* =====================================================================
+   Profile lookup
+   ===================================================================== */
+
+.lookup {
+  max-width: 760px;
+}
+.lookup__lead {
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1.7;
+  max-width: 68ch;
+}
+.formrow--big {
+  justify-content: flex-start;
+}
+.formrow--big input {
+  min-width: 340px;
+  font-size: 15px;
+  padding: 11px 14px;
+}
+
+.userlist {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+.usercard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  text-align: left;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.usercard:hover {
+  background: var(--panel-2);
+  border-color: rgba(102, 192, 244, 0.4);
+}
+.usercard img {
+  width: 44px;
+  height: 44px;
+  border-radius: 2px;
+  background: #0f171f;
+  flex: 0 0 auto;
+}
+.usercard__body {
+  min-width: 0;
+}
+.usercard__name {
+  display: block;
+  color: var(--text-bright);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usercard__meta {
+  display: block;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* =====================================================================
+   Library — laid out like the Steam client's own
+   ===================================================================== */
+
+.library {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 18px;
+  align-items: start;
+}
+.library__side {
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px;
+  position: sticky;
+  top: calc(var(--nav-h) + 10px);
+}
+.library__side input[type="search"],
+.library__side select {
+  width: 100%;
+  margin-bottom: 8px;
+  background: #0f171f;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 13px;
+}
+.library__list {
+  max-height: 62vh;
+  overflow-y: auto;
+}
+.libitem {
+  display: grid;
+  grid-template-columns: 46px 1fr auto;
+  gap: 9px;
+  align-items: center;
+  width: 100%;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+}
+.libitem:hover {
+  background: rgba(102, 192, 244, 0.1);
+}
+.libitem.is-active {
+  background: var(--panel-3);
+  color: var(--text-bright);
+}
+.libitem img {
+  width: 46px;
+  height: 22px;
+  object-fit: cover;
+  border-radius: 2px;
+  background: #0f171f;
+}
+.libitem__name {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.libitem__hours {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.libhero {
+  position: relative;
+  min-height: 260px;
+  margin-bottom: 18px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #0f171f;
+}
+.libhero__bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.85;
+}
+.libhero__inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 10px;
+  min-height: 260px;
+  padding: 20px;
+  background: linear-gradient(0deg, rgba(9, 13, 18, 0.95) 5%, rgba(9, 13, 18, 0.25) 60%, rgba(9, 13, 18, 0.05));
+}
+.libhero__logo {
+  max-width: 340px;
+  max-height: 110px;
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6));
+}
+.libhero__meta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.libhero__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pcard--installed {
+  box-shadow: 0 0 0 1px rgba(164, 208, 7, 0.45);
+}
+.pcard__badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  padding: 2px 6px;
+  border-radius: 2px;
+  background: rgba(92, 126, 16, 0.9);
+  color: #dbff4a;
+  font-size: 9px;
+  letter-spacing: 0.8px;
+}
+.pcard__action {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  background: rgba(9, 13, 18, 0.55);
+  transition: opacity 0.15s ease;
+}
+.pcard:hover .pcard__action,
+.pcard:focus-within .pcard__action {
+  opacity: 1;
+}
+
+/* =====================================================================
+   Player extras
+   ===================================================================== */
+
+.player__fallback {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  margin: 0;
+  padding: 10px 14px;
+  background: rgba(9, 13, 18, 0.88);
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+}
+.player__gif {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 2px 7px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--gold);
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+.player__thumb--gif::after {
+  content: "GIF";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.75);
+  color: var(--gold);
+  font-size: 8px;
+  letter-spacing: 0.6px;
+}
+.gamedesc img.is-animated {
+  image-rendering: auto;
+}
+
 /* =====================================================================
    Responsive
    ===================================================================== */
@@ -1711,6 +2320,34 @@ a.chip:hover {
 }
 
 @media (max-width: 900px) {
+  .library {
+    grid-template-columns: 1fr;
+  }
+  .library__side {
+    position: static;
+  }
+  .library__list {
+    max-height: 320px;
+  }
+  .panel--split {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+  .wishrow {
+    grid-template-columns: 120px 1fr;
+  }
+  .wishrow__price,
+  .wishrow__actions {
+    grid-column: 2;
+  }
+  .formrow--big input {
+    min-width: 0;
+    width: 100%;
+  }
+  .studiohead {
+    flex-direction: column;
+  }
+
   .hero__frame {
     flex-direction: column;
     height: auto;

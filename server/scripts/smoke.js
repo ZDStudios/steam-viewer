@@ -46,9 +46,19 @@ async function httpChecks() {
   for (const [label, path, check] of [
     ['search', '/api/search?term=portal', (data) => Array.isArray(data?.items)],
     ['app', '/api/app?appid=620', (data) => data?.game?.name],
+    ['trailers', '/api/app?appid=620', (data) => `${data?.game?.movies?.[0]?.sources?.length ?? 0} trailer sources`],
     ['players', '/api/players?appid=730', (data) => typeof data?.players === 'number' || data?.players === null],
     ['mostplayed', '/api/mostplayed?limit=5', (data) => Array.isArray(data)],
     ['home', '/api/home', (data) => Array.isArray(data?.topSellers)],
+    // The genre pages were empty for years because `getappsingenre` is dead;
+    // this is the check that catches it happening again.
+    ['genre', '/api/genre?genre=Racing', (data) => (data?.sections?.[0]?.items?.length ? `${data.sections.length} sections` : false)],
+    ['browse', '/api/browse?genre=RPG&filter=topsellers&limit=6', (data) => (data?.length ? `${data.length} cards` : false)],
+    ['developer', '/api/developer?name=Valve', (data) => (data?.games?.length ? `${data.games.length} titles` : false)],
+    // Key-less: these must work whether or not STEAM_API_KEY is set.
+    ['users', '/api/users?text=gabelogannewell', (data) => (Array.isArray(data) ? `${data.length} profiles` : false)],
+    ['profile', '/api/profile?id=gabelogannewell', (data) => (data?.steamid ? `${data.gameCount ?? 0} games` : false)],
+    ['steamdb', '/api/steamdb?appid=730', (data) => (data?.links?.app ? `source ${data.source}` : false)],
   ]) {
     try {
       const { status, body } = await getJson(path);
@@ -57,6 +67,23 @@ async function httpChecks() {
     } catch (error) {
       log(false, `GET ${path}`, error.message);
     }
+  }
+
+  // The home page used to show the same racing game three times and the
+  // hardware promo twice, so check the merged payload really is unique.
+  try {
+    const { body } = await getJson('/api/home');
+    const data = body?.data || {};
+    const rows = ['featured', 'specials', 'topSellers', 'newReleases', 'comingSoon', 'freeToPlay', 'underTen'];
+    const all = rows.flatMap((key) => data[key] || []);
+    const ids = all.map((item) => item.appid);
+    const dupes = ids.filter((id, index) => ids.indexOf(id) !== index);
+    const hardware = all.filter((item) => /^\s*(?:valve\s+)?steam\s*(?:machine|deck|link|controller|frame)\b/i.test(item.name || ''));
+
+    log(dupes.length === 0, 'home has no repeated titles', `${all.length} cards, ${dupes.length} duplicate(s)`);
+    log(hardware.length === 0, 'home has no hardware promos', hardware.map((item) => item.name).join(', ') || 'none');
+  } catch (error) {
+    log(false, 'home de-duplication', error.message);
   }
 }
 

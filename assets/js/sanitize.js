@@ -26,6 +26,23 @@ const ALLOWED_ATTRS = {
 
 const SAFE_LINK = /^(https?:|mailto:)/i;
 
+/**
+ * Steam's own markup still points at CDN hostnames that were retired years
+ * ago. Left alone they resolve to nothing, which is why illustrations and
+ * animated GIFs inside store descriptions and news posts came up blank —
+ * the markup was fine, the hosts were dead. Same rewrite the relay applies
+ * to the URLs it hands over.
+ */
+const HOST_REWRITES = [
+  [/^steamcdn-a\.akamaihd\.net$/i, 'cdn.cloudflare.steamstatic.com'],
+  [/^cdn\.akamai\.steamstatic\.com$/i, 'cdn.cloudflare.steamstatic.com'],
+  [/^media\.steampowered\.com$/i, 'cdn.cloudflare.steamstatic.com'],
+  [/^steamstore-a\.akamaihd\.net$/i, 'shared.cloudflare.steamstatic.com'],
+  [/^steamcommunity-a\.akamaihd\.net$/i, 'community.cloudflare.steamstatic.com'],
+  [/^avatars\.akamai\.steamstatic\.com$/i, 'avatars.cloudflare.steamstatic.com'],
+  [/^video\.akamai\.steamstatic\.com$/i, 'video.cloudflare.steamstatic.com'],
+];
+
 function safeUrl(value, { requireHttp = false } = {}) {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -33,8 +50,26 @@ function safeUrl(value, { requireHttp = false } = {}) {
   const candidate = raw.startsWith('//') ? `https:${raw}` : raw;
   if (!SAFE_LINK.test(candidate)) return null;
   if (requireHttp && !/^https?:/i.test(candidate)) return null;
-  return candidate.replace(/^http:\/\//i, 'https://');
+
+  if (/^mailto:/i.test(candidate)) return candidate;
+
+  try {
+    const url = new URL(candidate);
+    // Plain http would be blocked as mixed content on an https page anyway.
+    url.protocol = 'https:';
+    for (const [pattern, replacement] of HOST_REWRITES) {
+      if (pattern.test(url.hostname)) {
+        url.hostname = replacement;
+        break;
+      }
+    }
+    return url.toString();
+  } catch {
+    return candidate.replace(/^http:\/\//i, 'https://');
+  }
 }
+
+const ANIMATED = /\.(?:gif|webp|apng)(?:[?#]|$)/i;
 
 /** Steam wraps outbound links in a redirect page; unwrap for a cleaner href. */
 function unwrapSteamRedirect(href) {
@@ -86,7 +121,15 @@ function sanitizeNode(node, out, doc) {
         const src = safeUrl(value, { requireHttp: true });
         if (src) {
           clean.setAttribute('src', src);
-          clean.setAttribute('loading', 'lazy');
+          // An animated image that is lazily decoded shows its first frame
+          // and stops, so GIFs opt out of both.
+          if (ANIMATED.test(src)) {
+            clean.setAttribute('decoding', 'sync');
+            clean.setAttribute('class', 'is-animated');
+          } else {
+            clean.setAttribute('loading', 'lazy');
+            clean.setAttribute('decoding', 'async');
+          }
           clean.setAttribute('referrerpolicy', 'no-referrer');
         }
         continue;

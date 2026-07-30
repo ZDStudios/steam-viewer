@@ -15,7 +15,7 @@ import express from 'express';
 import { WebSocketServer } from 'ws';
 
 import { ACTIONS, runAction } from './actions.js';
-import { cache, hasApiKey, internals, SteamError } from './steam.js';
+import { cache, GENRES, hasApiKey, internals, SteamError } from './steam.js';
 
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -80,7 +80,8 @@ app.get('/healthz', (req, res) => {
     clients: wss ? wss.clients.size : 0,
     cache: cache.stats(),
     steam: internals.limiter.stats(),
-    library: hasApiKey(),
+    library: true,
+    apiKey: hasApiKey(),
   });
 });
 
@@ -107,7 +108,7 @@ app.get('/', (req, res) => {
     <li><a href="/api/search?term=portal">/api/search?term=portal</a></li>
     <li><a href="/api/app?appid=620">/api/app?appid=620</a></li>
   </ul>
-  <p>Library view: ${hasApiKey() ? 'enabled' : 'disabled (set STEAM_API_KEY to enable)'}</p>
+  <p>Profiles &amp; libraries: enabled without a key (community endpoints)${hasApiKey() ? ' &middot; STEAM_API_KEY set, so levels and recents are included' : ''}</p>
 </main>`);
 });
 
@@ -180,7 +181,9 @@ wss.on('connection', (socket, req) => {
       server: 'steam-viewer-relay',
       version: 1,
       actions: Object.keys(ACTIONS),
-      library: hasApiKey(),
+      library: true,
+      apiKey: hasApiKey(),
+      genres: GENRES,
       liveIntervalMs: LIVE_INTERVAL_MS,
     },
   });
