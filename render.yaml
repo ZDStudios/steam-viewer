@@ -1,0 +1,29 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# In Render: New ▸ Blueprint ▸ pick this repository. The relay in `server/`
+# is deployed as a single web service with WebSocket support enabled by
+# default. Free instances sleep after ~15 minutes of inactivity; the web
+# client shows a "waking up" state and retries, so that is fine.
+services:
+  - type: web
+    name: steam-viewer-relay
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm ci --omit=dev || npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20.18.1"
+
+      # Optional. Comma-separated list of origins allowed to connect,
+      # e.g. "https://<your-user>.github.io". Leave unset to allow any origin.
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+      # Optional. Enables the Library view (owned games for a Steam profile).
+      # Get one at https://steamcommunity.com/dev/apikey
+      - key: STEAM_API_KEY
+        sync: false
