@@ -1,8 +1,8 @@
 /** Boot, header wiring and the hash router. */
-import { normalizeBase, Relay } from './client.js';
-import { toast } from './components.js';
-import { $, $$, attachImageFallbacks, debounce, esc, escAttr, formatMoney, REGIONS, scrollToTop, setMediaProxy } from './util.js';
-import * as wishlist from './wishlist.js';
+import { normalizeBase, Relay } from './client.js?v=2026-07-31.4';
+import { toast } from './components.js?v=2026-07-31.4';
+import { $, $$, attachImageFallbacks, debounce, esc, escAttr, formatMoney, REGIONS, scrollToTop, setMediaProxy } from './util.js?v=2026-07-31.4';
+import * as wishlist from './wishlist.js?v=2026-07-31.4';
 import {
   aboutView,
   appView,
@@ -16,7 +16,7 @@ import {
   searchView,
   usersView,
   wishlistView,
-} from './views.js';
+} from './views.js?v=2026-07-31.4';
 
 const CONFIG = window.STEAM_VIEWER_CONFIG || {};
 const LS = {
@@ -44,7 +44,6 @@ const FALLBACK_GENRES = [
  * ------------------------------------------------------------------ */
 
 const relay = new Relay(resolveServerUrl());
-setMediaProxy(relay.baseUrl);
 
 const ctx = {
   relay,
@@ -86,17 +85,17 @@ const CONN_LABELS = {
 };
 
 relay.on('state', ({ state, detail, baseUrl }) => {
-  // Assets that stall on Steam's CDN get re-requested through the relay.
-  setMediaProxy(baseUrl);
   const [className, label] = CONN_LABELS[state] || CONN_LABELS.offline;
   connPill.className = `conn ${className}`;
   $('.conn__label', connPill).textContent = label;
   connPill.title = detail ? `${label} — ${detail}` : label;
-  footServer.textContent = baseUrl ? `relay: ${baseUrl}` : 'relay: not configured';
+  footServer.textContent = baseUrl ? `relay: ${baseUrl} · page ${CLIENT_BUILD}` : 'relay: not configured';
 });
 
 relay.on('hello', (capabilities) => {
   populateGenres(capabilities?.genres || FALLBACK_GENRES);
+  // Only route assets through a relay that actually serves /media.
+  setMediaProxy(relay.baseUrl, { enabled: (capabilities?.features || []).includes('media-proxy') });
 });
 
 connPill.addEventListener('click', () => openSettings());
@@ -447,8 +446,24 @@ window.addEventListener('hashchange', () => route());
 
 if (!window.location.hash) window.location.replace(`${window.location.pathname}${window.location.search}#/`);
 
+/** What this copy of the page is; shown in diagnostics and the footer. */
+export const CLIENT_BUILD = CONFIG.build || '2026-07-31.4';
+window.STEAM_VIEWER_CLIENT_BUILD = CLIENT_BUILD;
+
+async function loadCapabilities() {
+  try {
+    const caps = await relay.request('capabilities', {}, { timeoutMs: 75_000 });
+    relay.capabilities = caps;
+    populateGenres(caps?.genres || FALLBACK_GENRES);
+    setMediaProxy(relay.baseUrl, { enabled: (caps?.features || []).includes('media-proxy') });
+  } catch {
+    // Not fatal: the page works, assets just never route through the relay.
+  }
+}
+
 if (relay.configured) {
   relay.connect();
+  loadCapabilities();
   // Render's free tier sleeps; nudge it awake in parallel with the first view.
   relay.warm().then((awake) => {
     if (!awake && relay.state !== 'online') {

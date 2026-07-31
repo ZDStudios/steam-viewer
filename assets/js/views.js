@@ -17,11 +17,11 @@ import {
   skeletonGrid,
   skeletonPage,
   toast,
-} from './components.js';
-import { renderRichText } from './sanitize.js';
-import * as wishlist from './wishlist.js';
-import { pickCodec, ScreenPlayer } from './screen.js';
-import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime, movieSources } from './util.js';
+} from './components.js?v=2026-07-31.4';
+import { renderRichText } from './sanitize.js?v=2026-07-31.4';
+import * as wishlist from './wishlist.js?v=2026-07-31.4';
+import { pickCodec, ScreenPlayer } from './screen.js?v=2026-07-31.4';
+import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime, movieSources } from './util.js?v=2026-07-31.4';
 
 /** Card options every grid shares: hide ignored titles, mark wishlisted ones. */
 const cardOpts = (extra = {}) => ({ isWishlisted: (appid) => wishlist.has(appid), ...extra });
@@ -1805,7 +1805,11 @@ export async function diagnosticsView(root, ctx) {
         <table class="diag">
           <tr><td>URL</td><td class="diag__url">${esc(ctx.relay.baseUrl || 'not configured')}</td></tr>
           <tr><td>Transport</td><td>${esc(ctx.relay.state)}</td></tr>
-          <tr><td>Build</td><td>${caps ? esc(caps.build || 'unknown (old relay)') : `<span class="is-bad">unreachable — ${esc(capsError)}</span>`}</td></tr>
+          <tr><td>Page build</td><td>${esc(window.STEAM_VIEWER_CLIENT_BUILD || 'unknown')}</td></tr>
+          <tr><td>Relay build</td><td>${caps ? esc(caps.build || 'unknown (old relay)') : `<span class="is-bad">unreachable — ${esc(capsError)}</span>`}</td></tr>
+          <tr><td>Asset proxy</td><td>${
+            caps ? ((caps.features || []).includes('media-proxy') ? '<span class="is-ok">available</span>' : 'not on this relay') : '—'
+          }</td></tr>
           <tr><td>Steam API key</td><td>${caps ? (caps.apiKey ? 'set' : 'not set (profiles still work)') : '—'}</td></tr>
           <tr><td>Features</td><td>${
             !caps

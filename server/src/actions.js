@@ -18,7 +18,7 @@ import { cache, SteamError, TTL } from './steam.js';
  * deploying from the wrong branch" is distinguishable from "the feature is
  * broken" — they look identical from the browser otherwise.
  */
-export const BUILD = '2026-07-31.3';
+export const BUILD = '2026-07-31.4';
 
 export const FEATURES = [
   'trailer-probe', // movies carry a probed `sources` list
@@ -31,6 +31,8 @@ export const FEATURES = [
   'steamspy', // ownership estimates
   'remote-play', // paired agents
   'dedupe', // collapsed duplicate storefront rows
+  'media-proxy', // GET /media re-serves Steam assets
+  'agent-stream', // built-in screen streaming through the relay
 ];
 
 const str = (value, fallback = '') => (typeof value === 'string' ? value.trim() : fallback);

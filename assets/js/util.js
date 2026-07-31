@@ -129,9 +129,15 @@ export function plainText(html, limit = 260) {
 
 let mediaProxyBase = '';
 
-/** Point the asset fallbacks at a relay that can re-serve Steam media. */
-export function setMediaProxy(baseUrl) {
-  mediaProxyBase = String(baseUrl || '').replace(/\/+$/, '');
+/**
+ * Point the asset fallbacks at a relay that can re-serve Steam media.
+ *
+ * Only enabled once the relay has confirmed it serves `/media`. An older relay
+ * answers that route with 404, and routing images to it would turn a slow
+ * image into a permanently broken one.
+ */
+export function setMediaProxy(baseUrl, { enabled = false } = {}) {
+  mediaProxyBase = enabled ? String(baseUrl || '').replace(/\/+$/, '') : '';
 }
 
 export const hasMediaProxy = () => Boolean(mediaProxyBase);
@@ -164,6 +170,15 @@ function advanceImage(img) {
   if (viaRelay) {
     img.dataset.proxied = '1';
     img.src = viaRelay;
+    return;
+  }
+
+  // If the relay could not serve it either, go back to the URL Steam gave us
+  // and let the browser keep trying — a slow image must never end up worse
+  // off than if it had never been re-routed.
+  if (img.dataset.proxied === '1' && img.dataset.originalSrc) {
+    img.dataset.proxied = 'reverted';
+    img.src = img.dataset.originalSrc;
     return;
   }
 
