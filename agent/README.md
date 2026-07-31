@@ -42,9 +42,15 @@ Moonlight route below to actually play.
 npm start -- --relay <url> --stream-fps 30 --stream-bitrate 8M --stream-height 1080
 ```
 
-Install ffmpeg from <https://ffmpeg.org/download.html> (on Windows,
-`winget install Gyan.FFmpeg` works) and make sure `ffmpeg` runs in a fresh
-terminal, or pass `--ffmpeg C:\path\to\ffmpeg.exe`.
+**You do not need to install ffmpeg yourself.** `npm install` pulls in a static
+build (`ffmpeg-static`) as an optional dependency, and if that was skipped or
+failed the agent fetches it on first run and says so. Everything lands in the
+agent's own `node_modules` — nothing is installed system-wide, no PATH is
+changed and nothing asks for administrator rights.
+
+Order of preference: `--ffmpeg <path>` → `FFMPEG_PATH` → the bundled build →
+whatever `ffmpeg` is on your PATH. Pass `--no-ffmpeg-install` to never
+download, in which case streaming is simply reported as unavailable.
 
 ### Watching in the browser, with input (Moonlight)
 
@@ -121,6 +127,7 @@ pin one with `--code` only if you understand that.
 | `--no-launch` | Read-only mode |
 | `--refresh-seconds <n>` | Library rescan interval (default 300, minimum 60) |
 | `--stream=false` | Disable built-in streaming |
+| `--no-ffmpeg-install` | Never download ffmpeg; use only what is already present |
 | `--ffmpeg <path>` | ffmpeg binary, if not on PATH |
 | `--stream-fps <n>` | Capture frame rate (default 30) |
 | `--stream-bitrate <r>` | Video bitrate, e.g. `8M` (default 6M) |

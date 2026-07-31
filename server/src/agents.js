@@ -28,10 +28,13 @@ export function register({ socket, code, info = {}, games = [] }) {
   if (!/^[A-Z0-9]{6,16}$/.test(key)) throw new SteamError('Invalid pairing code', { status: 400 });
 
   // A reconnecting agent replaces its previous socket rather than stacking up.
+  // 4001 tells the displaced agent it was replaced, so it exits instead of
+  // reconnecting — two agents sharing a code would otherwise evict each other
+  // forever and neither would be usable.
   const existing = agents.get(key);
   if (existing && existing.socket !== socket) {
     try {
-      existing.socket.close(1000, 'replaced by a newer agent connection');
+      existing.socket.close(4001, 'replaced by another agent using the same pairing code');
     } catch {
       /* already gone */
     }

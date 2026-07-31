@@ -12,6 +12,18 @@
  * the agent detects that too.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** The agent's own directory, so an installed encoder stays self-contained. */
+const AGENT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const BUNDLED_FFMPEG = path.join(
+  AGENT_DIR,
+  'node_modules',
+  'ffmpeg-static',
+  process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg',
+);
 
 /**
  * Where a WebM stream stops being header and starts being video: the first
@@ -67,19 +79,93 @@ export const CODECS = {
   vp8: { container: 'webm', mime: 'video/webm; codecs="vp8"' },
 };
 
+function ffmpegWorks(candidate) {
+  try {
+    const result = spawnSync(candidate, ['-hide_banner', '-version'], { encoding: 'utf8', timeout: 10_000 });
+    if (result.status !== 0) return null;
+    return { path: candidate, version: (result.stdout || '').split('\n')[0] };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Find an encoder. The bundled copy is preferred over whatever is on PATH
+ * because we know exactly which build it is.
+ */
 export function detectFfmpeg(explicit) {
-  const candidates = [explicit, process.env.FFMPEG_PATH, 'ffmpeg'].filter(Boolean);
+  const candidates = [explicit, process.env.FFMPEG_PATH, BUNDLED_FFMPEG, 'ffmpeg'].filter(Boolean);
   for (const candidate of candidates) {
-    try {
-      const result = spawnSync(candidate, ['-hide_banner', '-version'], { encoding: 'utf8', timeout: 8000 });
-      if (result.status === 0) {
-        return { path: candidate, version: (result.stdout || '').split('\n')[0] };
-      }
-    } catch {
-      // try the next candidate
-    }
+    // A path we constructed has to exist before it is worth executing.
+    if (candidate === BUNDLED_FFMPEG && !fs.existsSync(candidate)) continue;
+    const found = ffmpegWorks(candidate);
+    if (found) return found;
   }
   return null;
+}
+
+/**
+ * Fetch an encoder if there is not one already.
+ *
+ * `ffmpeg-static` publishes the right static build for each platform and is an
+ * optional dependency, so a normal `npm install` usually has it already. When
+ * it does not — a failed or skipped optional install — it is fetched here with
+ * npm rather than by downloading and unpacking archives by hand: npm is
+ * certainly present (the user ran it to get this far) and the package handles
+ * platform and architecture detection itself.
+ *
+ * Everything lands inside the agent's own `node_modules`. Nothing is installed
+ * system-wide, no PATH is modified and no elevation is asked for.
+ */
+export async function ensureFfmpeg({ explicit = null, allowInstall = true, timeoutMs = 180_000, log = console.log } = {}) {
+  const existing = detectFfmpeg(explicit);
+  if (existing) return { ...existing, installed: false };
+  if (!allowInstall) return null;
+
+  log('[agent] no ffmpeg found — fetching one (about 30 MB, one time)…');
+
+  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const ok = await new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(npm, ['install', 'ffmpeg-static', '--no-audit', '--no-fund', '--loglevel=error'], {
+        cwd: AGENT_DIR,
+        stdio: ['ignore', 'inherit', 'inherit'],
+        // npm is a shell script on Windows and cannot be spawned directly.
+        shell: process.platform === 'win32',
+      });
+    } catch {
+      resolve(false);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        /* already gone */
+      }
+      resolve(false);
+    }, timeoutMs);
+
+    child.on('error', () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0);
+    });
+  });
+
+  if (!ok) {
+    log('[agent] could not fetch ffmpeg automatically — install it yourself and restart, or pass --ffmpeg <path>.');
+    return null;
+  }
+
+  const found = detectFfmpeg(explicit);
+  if (found) log('[agent] ffmpeg ready.');
+  return found ? { ...found, installed: true } : null;
 }
 
 /** Platform-specific desktop capture input arguments. */

@@ -23,7 +23,7 @@ import process from 'node:process';
 import { WebSocket } from 'ws';
 
 import { findSteamRoot, listInstalledGames } from './steamfs.js';
-import { CODECS, detectFfmpeg, ScreenStream } from './stream.js';
+import { CODECS, ensureFfmpeg, ScreenStream } from './stream.js';
 
 const VERSION = '1.0.0';
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -64,6 +64,7 @@ const STREAM_FPS = Number(options['stream-fps'] || 30);
 const STREAM_BITRATE = options['stream-bitrate'] || '6M';
 const STREAM_HEIGHT = Number(options['stream-height'] || 1080);
 const STREAM_INPUT = options['stream-input'] || null;
+const ALLOW_FFMPEG_INSTALL = options['no-ffmpeg-install'] !== 'true';
 const STREAM_DISPLAY = options['stream-display'] || null;
 
 const WEB_STREAM_PORT = Number(options['web-stream-port'] || 8080);
@@ -132,6 +133,7 @@ Options
   --stream-bitrate <r>   Video bitrate, e.g. 8M (default 6M)
   --stream-height <n>    Scale down to this height (default 1080)
   --stream-display <s>   Capture source override (gdigrab/x11grab/avfoundation)
+  --no-ffmpeg-install    Never download ffmpeg; use only what is already here
   --ca <path>            Extra CA certificate to trust (PEM). Needed when
                          antivirus or a corporate proxy inspects HTTPS.
   --insecure             Skip certificate verification entirely. Last resort.
@@ -251,7 +253,7 @@ async function streamingStatus() {
       reason: ffmpeg
         ? null
         : STREAM_ENABLED
-          ? 'ffmpeg was not found on this PC'
+          ? 'ffmpeg could not be found or installed on this PC'
           : 'disabled with --stream=false',
     },
     // Moonlight registers this scheme when the native client is installed.
@@ -321,7 +323,7 @@ const asPayload = () =>
  * Screen streaming
  * ------------------------------------------------------------------ */
 
-const ffmpeg = STREAM_ENABLED ? detectFfmpeg(FFMPEG_PATH) : null;
+let ffmpeg = null;
 let screen = null;
 
 /**
@@ -586,7 +588,19 @@ async function connect() {
     if (message.id && message.op) handleOperation(message);
   });
 
-  socket.on('close', () => {
+  socket.on('close', (code, reasonBuffer) => {
+    // Another agent took this pairing code. Reconnecting would just evict it
+    // straight back, so stop and say so.
+    if (code === 4001) {
+      console.error(`
+[agent] Another agent connected with the pairing code ${CODE}, so this one has stopped.
+
+  Two copies cannot share a code. Close the other one, or start this one with a
+  different --code.
+`);
+      process.exit(1);
+    }
+
     // A certificate failure will not fix itself by reconnecting.
     if (lastError && isCertError(lastError)) {
       if (retryWithSystemCa() === false) {
@@ -619,6 +633,13 @@ console.log(`  relay: ${RELAY}`);
 await scanLibrary();
 console.log(`  steam: ${steamRoot || 'not found'}`);
 console.log(`  games: ${installed.length} installed`);
+// Resolve (and if necessary fetch) the encoder before pairing, so the site is
+// told the truth about whether streaming is available.
+if (STREAM_ENABLED) {
+  ffmpeg = await ensureFfmpeg({ explicit: FFMPEG_PATH, allowInstall: ALLOW_FFMPEG_INSTALL });
+}
+console.log(`  video: ${ffmpeg ? `${ffmpeg.path === 'ffmpeg' ? 'ffmpeg (PATH)' : ffmpeg.path}` : 'no encoder — streaming unavailable'}`);
+
 if (!ALLOW_LAUNCH) console.log('  mode:  read-only (--no-launch)');
 if (INSECURE) console.log('  tls:   verification DISABLED (--insecure)');
 else if (SYSTEM_CA_RETRIED) console.log('  tls:   using the system certificate store');

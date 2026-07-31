@@ -170,8 +170,10 @@ needs port-forwarding. It never sees your Steam password.
 
 ### Watching in the browser (built in)
 
-With **ffmpeg** installed on the gaming PC, the agent streams the screen to the
-site by itself — no Sunshine, no second server. It captures the desktop,
+The agent streams the screen to the site by itself. ffmpeg comes with it — a
+static build is an optional npm dependency, and the agent fetches one into its
+own folder on first run if that was skipped, so there is nothing to install
+system-wide. It — no Sunshine, no second server. It captures the desktop,
 encodes to whichever codec the browser reports it can decode (H.264 in
 fragmented MP4, or VP8 in WebM for browsers without proprietary codecs), and
 pushes fragments down the connection the agent already holds. The page feeds

@@ -15,5 +15,9 @@
   },
   "dependencies": {
     "ws": "^8.18.0"
+  },
+  "//optionalDependencies": "ffmpeg-static provides the screen encoder. It is optional so a failed download never breaks the install; the agent fetches it on first run if it is missing.",
+  "optionalDependencies": {
+    "ffmpeg-static": "^5.2.0"
   }
 }
