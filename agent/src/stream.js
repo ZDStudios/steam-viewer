@@ -94,10 +94,10 @@ function ffmpegWorks(candidate) {
  * because we know exactly which build it is.
  */
 export function detectFfmpeg(explicit) {
-  const candidates = [explicit, process.env.FFMPEG_PATH, BUNDLED_FFMPEG, 'ffmpeg'].filter(Boolean);
+  const candidates = [explicit, process.env.FFMPEG_PATH, LOCAL_BIN, BUNDLED_FFMPEG, 'ffmpeg'].filter(Boolean);
   for (const candidate of candidates) {
     // A path we constructed has to exist before it is worth executing.
-    if (candidate === BUNDLED_FFMPEG && !fs.existsSync(candidate)) continue;
+    if ((candidate === BUNDLED_FFMPEG || candidate === LOCAL_BIN) && !fs.existsSync(candidate)) continue;
     const found = ffmpegWorks(candidate);
     if (found) return found;
   }
@@ -105,40 +105,90 @@ export function detectFfmpeg(explicit) {
 }
 
 /**
- * Fetch an encoder if there is not one already.
- *
- * `ffmpeg-static` publishes the right static build for each platform and is an
- * optional dependency, so a normal `npm install` usually has it already. When
- * it does not — a failed or skipped optional install — it is fetched here with
- * npm rather than by downloading and unpacking archives by hand: npm is
- * certainly present (the user ran it to get this far) and the package handles
- * platform and architecture detection itself.
- *
- * Everything lands inside the agent's own `node_modules`. Nothing is installed
- * system-wide, no PATH is modified and no elevation is asked for.
+ * Where a self-installed encoder lives. Kept beside the agent so removing the
+ * folder removes everything it ever downloaded.
  */
-export async function ensureFfmpeg({ explicit = null, allowInstall = true, timeoutMs = 180_000, log = console.log } = {}) {
-  const existing = detectFfmpeg(explicit);
-  if (existing) return { ...existing, installed: false };
-  if (!allowInstall) return null;
+const LOCAL_DIR = path.join(AGENT_DIR, '.ffmpeg');
+const LOCAL_BIN = path.join(LOCAL_DIR, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
 
-  log('[agent] no ffmpeg found — fetching one (about 30 MB, one time)…');
+/**
+ * Static builds, by platform. BtbN publishes a `latest` tag that always points
+ * at a current build, so these URLs do not need updating.
+ */
+function downloadPlan() {
+  if (process.platform === 'win32') {
+    return {
+      url: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip',
+      archive: 'ffmpeg.zip',
+      kind: 'zip',
+    };
+  }
+  if (process.platform === 'darwin') {
+    return { url: 'https://evermeet.cx/ffmpeg/getrelease/zip', archive: 'ffmpeg.zip', kind: 'zip' };
+  }
+  const arch = process.arch === 'arm64' ? 'linuxarm64' : 'linux64';
+  return {
+    url: `https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-${arch}-gpl.tar.xz`,
+    archive: 'ffmpeg.tar.xz',
+    kind: 'tar.xz',
+  };
+}
 
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const ok = await new Promise((resolve) => {
+function extractCommand(kind, archivePath, targetDir) {
+  if (kind === 'zip') {
+    // Expand-Archive ships with Windows PowerShell; macOS has unzip.
+    return process.platform === 'win32'
+      ? {
+          command: 'powershell',
+          args: [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            `Expand-Archive -LiteralPath "${archivePath}" -DestinationPath "${targetDir}" -Force`,
+          ],
+        }
+      : { command: 'unzip', args: ['-o', '-q', archivePath, '-d', targetDir] };
+  }
+  return { command: 'tar', args: ['-xJf', archivePath, '-C', targetDir] };
+}
+
+/** Find the ffmpeg executable anywhere inside an extracted build. */
+function findBinary(dir, depth = 0) {
+  if (depth > 4) return null;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  const wanted = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isFile() && entry.name.toLowerCase() === wanted) return full;
+    if (entry.isDirectory()) {
+      const found = findBinary(full, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function run(command, args, timeoutMs = 180_000) {
+  return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(npm, ['install', 'ffmpeg-static', '--no-audit', '--no-fund', '--loglevel=error'], {
-        cwd: AGENT_DIR,
-        stdio: ['ignore', 'inherit', 'inherit'],
-        // npm is a shell script on Windows and cannot be spawned directly.
-        shell: process.platform === 'win32',
-      });
+      // No `shell: true` here — arguments carry filesystem paths, and letting a
+      // shell re-parse them is both fragile and a quoting hazard.
+      child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     } catch {
       resolve(false);
       return;
     }
-
+    let stderr = '';
+    child.stderr?.on('data', (chunk) => {
+      stderr = `${stderr}${chunk}`.slice(-800);
+    });
     const timer = setTimeout(() => {
       try {
         child.kill();
@@ -147,24 +197,88 @@ export async function ensureFfmpeg({ explicit = null, allowInstall = true, timeo
       }
       resolve(false);
     }, timeoutMs);
-
     child.on('error', () => {
       clearTimeout(timer);
       resolve(false);
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve(code === 0);
+      resolve(code === 0 || { failed: stderr.trim() });
     });
   });
+}
 
-  if (!ok) {
-    log('[agent] could not fetch ffmpeg automatically — install it yourself and restart, or pass --ffmpeg <path>.');
+/**
+ * Fetch an encoder if there is not one already.
+ *
+ * The download happens *in this process* rather than by shelling out to npm.
+ * That matters on machines where antivirus or a corporate proxy inspects
+ * HTTPS: this process already has whatever certificate configuration got it
+ * talking to the relay (`--use-system-ca`, `--ca`, …), whereas a child npm —
+ * and the postinstall script of a package like ffmpeg-static — starts fresh,
+ * fails to verify the intercepted certificate, and reports success anyway
+ * because the dependency is optional. That is the "up to date, but no binary"
+ * case this replaces.
+ *
+ * Everything lands in `agent/.ffmpeg`. Nothing is installed system-wide, no
+ * PATH is modified, and nothing needs administrator rights.
+ */
+export async function ensureFfmpeg({ explicit = null, allowInstall = true, log = console.log } = {}) {
+  const existing = detectFfmpeg(explicit);
+  if (existing) return { ...existing, installed: false };
+  if (!allowInstall) return null;
+
+  const plan = downloadPlan();
+  log('[agent] no ffmpeg found — downloading a static build (~30 MB, one time)…');
+
+  try {
+    fs.mkdirSync(LOCAL_DIR, { recursive: true });
+  } catch (error) {
+    log(`[agent] could not create ${LOCAL_DIR}: ${error.message}`);
     return null;
   }
 
-  const found = detectFfmpeg(explicit);
-  if (found) log('[agent] ffmpeg ready.');
+  const archivePath = path.join(LOCAL_DIR, plan.archive);
+
+  try {
+    const response = await fetch(plan.url, { redirect: 'follow', signal: AbortSignal.timeout(300_000) });
+    if (!response.ok) throw new Error(`server responded ${response.status}`);
+    fs.writeFileSync(archivePath, Buffer.from(await response.arrayBuffer()));
+  } catch (error) {
+    log(`[agent] download failed: ${error.message}`);
+    log('[agent] install ffmpeg yourself and restart, or pass --ffmpeg <path>.');
+    log('[agent]   Windows:  winget install Gyan.FFmpeg');
+    log('[agent]   macOS:    brew install ffmpeg');
+    log('[agent]   Linux:    sudo apt install ffmpeg');
+    return null;
+  }
+
+  const { command, args } = extractCommand(plan.kind, archivePath, LOCAL_DIR);
+  const extracted = await run(command, args);
+  if (extracted !== true) {
+    log(`[agent] could not unpack the download${extracted?.failed ? `: ${extracted.failed}` : ''}.`);
+    return null;
+  }
+
+  const binary = findBinary(LOCAL_DIR);
+  if (!binary) {
+    log('[agent] the download did not contain an ffmpeg executable.');
+    return null;
+  }
+
+  // Flatten to a predictable location so later runs skip all of this.
+  try {
+    if (path.resolve(binary) !== path.resolve(LOCAL_BIN)) fs.copyFileSync(binary, LOCAL_BIN);
+    if (process.platform !== 'win32') fs.chmodSync(LOCAL_BIN, 0o755);
+    fs.rmSync(archivePath, { force: true });
+  } catch (error) {
+    log(`[agent] could not place the binary: ${error.message}`);
+    return null;
+  }
+
+  const found = ffmpegWorks(LOCAL_BIN);
+  if (found) log(`[agent] ffmpeg ready (${LOCAL_BIN}).`);
+  else log('[agent] the downloaded ffmpeg would not run.');
   return found ? { ...found, installed: true } : null;
 }
 

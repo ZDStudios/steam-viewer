@@ -43,14 +43,20 @@ npm start -- --relay <url> --stream-fps 30 --stream-bitrate 8M --stream-height 1
 ```
 
 **You do not need to install ffmpeg yourself.** `npm install` pulls in a static
-build (`ffmpeg-static`) as an optional dependency, and if that was skipped or
-failed the agent fetches it on first run and says so. Everything lands in the
-agent's own `node_modules` — nothing is installed system-wide, no PATH is
-changed and nothing asks for administrator rights.
+build as an optional dependency, and if that was skipped or failed the agent
+downloads one itself on first run into `agent/.ffmpeg`. Nothing is installed
+system-wide, no PATH is changed, nothing asks for administrator rights, and
+deleting the folder removes it.
 
-Order of preference: `--ffmpeg <path>` → `FFMPEG_PATH` → the bundled build →
-whatever `ffmpeg` is on your PATH. Pass `--no-ffmpeg-install` to never
-download, in which case streaming is simply reported as unavailable.
+Order of preference: `--ffmpeg <path>` → `FFMPEG_PATH` → the downloaded copy →
+the npm one → whatever `ffmpeg` is on your PATH. Pass `--no-ffmpeg-install` to
+never download, in which case streaming is reported as unavailable.
+
+The download runs *inside* the agent rather than shelling out to npm, which
+matters on a PC where HTTPS is inspected: by then the agent has already sorted
+out its certificates, whereas a child npm process starts fresh — and because
+the dependency is optional, npm reports success even when its own download
+failed, leaving you with "up to date" and no binary.
 
 ### Watching in the browser, with input (Moonlight)
 
