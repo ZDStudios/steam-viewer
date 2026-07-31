@@ -168,10 +168,16 @@ It prints a pairing code; enter that under **Remote Play** on the site. It reads
 `appmanifest_*.acf` files, launches them with `steam://rungameid/<id>`, and dials *out* to the relay so nothing
 needs port-forwarding. It never sees your Steam password.
 
-**Video does not stream into the browser.** Moonlight's GameStream protocol and Steam Remote Play have no browser
-client, and there is no web SDK for Steam Link. Instead the agent detects a
-[Sunshine](https://app.lizardbyte.dev/Sunshine/) host and the site's Stream button hands off to your native
-[Moonlight](https://moonlight-stream.org/) client, already pointed at that PC, with the game already starting.
+### Watching in the browser
+
+Install [Sunshine](https://app.lizardbyte.dev/Sunshine/) and
+[moonlight-web-stream](https://github.com/MrCreativ3001/moonlight-web-stream) on the gaming PC. The agent detects
+the latter on port 8080 and the site grows a **Stream in browser** panel plus a **Play & stream** button on every
+installed game — that starts the game and opens the player.
+
+Give moonlight-web-stream a `certificate` in its `server/config.json` to have the player embed *inline* in the page:
+an HTTPS page cannot embed a plain-`http` origin, so without one the player opens in its own tab instead (which
+works fine, it is just a second window). A native [Moonlight](https://moonlight-stream.org/) client is detected too.
 
 The pairing code is the only credential — anyone holding it can list and launch games on that PC. It is regenerated
 on every start unless pinned with `--code`, and `--no-launch` runs the agent read-only.
@@ -203,6 +209,18 @@ Store descriptions embed their short looping clips as muted `<video>` — this i
 store page. The sanitiser allows `<video>`/`<source>` from https origins and re-applies the playback flags itself
 (muted, looping, autoplaying, no controls), so the animation shows without the markup being able to add sound or
 grab focus.
+
+## When something is not showing
+
+Open **[#/diagnostics](#)** from the footer link. It runs from your browser and reports:
+
+- which relay you are talking to, its **build**, and whether it has every feature this page expects;
+- the trailer URLs for a chosen app, each one actually loaded in a `<video>` so you can see which CDN hosts answer;
+- the Steam image hosts, for comparison.
+
+The most common cause of "trailers/genres/profiles look broken" is a **relay running older code than the page** —
+Render deploys from whichever branch its service is configured for, which may not be the branch you are pushing.
+The diagnostics page names the missing features and says so explicitly.
 
 ## On SteamDB
 

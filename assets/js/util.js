@@ -156,6 +156,56 @@ export function attachImageFallbacks(root = document) {
   }
 }
 
+/**
+ * Steam has shuffled its trailer CDN between Akamai, Cloudflare and Fastly,
+ * and `appdetails` still hands out URLs on hosts that no longer answer.
+ *
+ * The relay probes these and puts a working one first, but this runs client
+ * side too so trailers still play when the page is talking to an older relay
+ * that never sent a `sources` list.
+ */
+export const VIDEO_HOSTS = [
+  'video.cloudflare.steamstatic.com',
+  'video.fastly.steamstatic.com',
+  'video.akamai.steamstatic.com',
+  'cdn.cloudflare.steamstatic.com',
+  'cdn.akamai.steamstatic.com',
+];
+
+export function videoCandidates(url) {
+  if (!url) return [];
+  const secure = String(url).replace(/^http:\/\//i, 'https://');
+
+  let parsed;
+  try {
+    parsed = new URL(secure);
+  } catch {
+    return [secure];
+  }
+
+  // Keep whatever host we were given first; it is right more often than not.
+  const hosts = [parsed.host, ...VIDEO_HOSTS.filter((host) => host !== parsed.host)];
+  return hosts.map((host) => {
+    const candidate = new URL(secure);
+    candidate.host = host;
+    return candidate.toString();
+  });
+}
+
+/** Expand a movie record from any relay version into an ordered source list. */
+export function movieSources(movie) {
+  if (!movie) return [];
+
+  // A current relay sends `sources` already probed and ordered.
+  const provided = Array.isArray(movie.sources) ? movie.sources : [];
+
+  // An older relay sent one URL per encoding, unprobed.
+  const legacy = [movie.mp4, movie.mp4Low, movie.webm, movie.webmLow].filter(Boolean);
+
+  const expanded = [...provided, ...legacy].flatMap(videoCandidates);
+  return expanded.filter((url, index, all) => url && all.indexOf(url) === index);
+}
+
 export function scrollToTop() {
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
 }

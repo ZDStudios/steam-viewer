@@ -20,7 +20,7 @@ import {
 } from './components.js';
 import { renderRichText } from './sanitize.js';
 import * as wishlist from './wishlist.js';
-import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime } from './util.js';
+import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime, movieSources } from './util.js';
 
 /** Card options every grid shares: hide ignored titles, mark wishlisted ones. */
 const cardOpts = (extra = {}) => ({ isWishlisted: (appid) => wishlist.has(appid), ...extra });
@@ -478,9 +478,11 @@ export async function appView(root, ctx, appid) {
       .map((movie) => ({
         kind: 'video',
         thumb: movie.thumb,
-        // The relay has already probed these and put a responding CDN host
-        // first; mountPlayer still falls through the rest on error.
-        sources: (movie.sources || [movie.mp4]).filter(Boolean),
+        // A current relay has already probed these and put a responding host
+        // first. movieSources() also expands the CDN host variants itself, so
+        // trailers still play against an older relay, and mountPlayer walks
+        // the rest of the list on error either way.
+        sources: movieSources(movie),
         poster: movie.thumb,
         label: movie.name || 'Trailer',
       }))
@@ -1228,6 +1230,7 @@ export async function usersView(root, ctx, query) {
  * ================================================================== */
 
 const AGENT_KEY = 'steam-viewer:agent-code';
+const STREAM_KEY = 'steam-viewer:web-stream-url';
 
 export async function playView(root, ctx) {
   ctx.setTitle('Remote Play · Steam Viewer');
@@ -1257,11 +1260,14 @@ npm install
 npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.com')}</pre>
         <p>It prints a pairing code — type that above.</p>
         <p class="loading-note" style="max-width:620px;margin:14px auto 0">
-          Streaming the picture into this page is not something a browser can do: neither Moonlight's GameStream
-          protocol nor Steam Link has a web client. If you install
-          <a href="https://app.lizardbyte.dev/Sunshine/" target="_blank" rel="noopener noreferrer">Sunshine</a> on the PC and
-          <a href="https://moonlight-stream.org/" target="_blank" rel="noopener noreferrer">Moonlight</a> on this device, the
-          agent detects it and the Stream button hands off to Moonlight already pointed at your PC.
+          To watch the game in this page as well, install
+          <a href="https://app.lizardbyte.dev/Sunshine/" target="_blank" rel="noopener noreferrer">Sunshine</a> and
+          <a href="https://github.com/MrCreativ3001/moonlight-web-stream" target="_blank" rel="noopener noreferrer">moonlight-web-stream</a>
+          on the same PC. The agent detects it and the player appears here. Give it a certificate in its
+          <code>server/config.json</code> and it embeds inline; without one it opens in its own tab, because an HTTPS
+          page cannot embed a plain-http origin. A native
+          <a href="https://moonlight-stream.org/" target="_blank" rel="noopener noreferrer">Moonlight</a> client is
+          detected too, if you prefer it.
         </p>
       </div>
     </div>`;
@@ -1298,15 +1304,7 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
         </div>
       </div>
 
-      ${
-        streaming.available
-          ? `<div class="buybox" style="margin-bottom:16px">
-               <span class="buybox__label">Stream this PC</span>
-               <a class="btn btn--green" href="${escAttr(streaming.moonlightUrl || '#')}">Open in Moonlight</a>
-               ${streaming.sunshineWebUi ? `<a class="btn btn--ghost" href="${escAttr(streaming.sunshineWebUi)}" target="_blank" rel="noopener noreferrer">Sunshine settings</a>` : ''}
-             </div>`
-          : `<p class="loading-note" style="text-align:left">${esc(streaming.note || 'Streaming is not set up on that PC.')}</p>`
-      }
+      <div id="stream-slot"></div>
 
       <div class="toolbar">
         <input type="search" id="agent-filter" placeholder="filter installed games" />
@@ -1314,6 +1312,109 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
       </div>
 
       <div class="grid grid--portrait" id="agent-grid"></div>`;
+
+    /* — in-browser streaming via moonlight-web-stream — */
+    const streamSlot = $('#stream-slot', body);
+    const savedStream = localStorage.getItem(STREAM_KEY) || '';
+    const webStream = streaming.webStream || {};
+    // A manual override wins: the agent can only see its own machine.
+    const streamUrl = savedStream || webStream.url || webStream.localUrl || '';
+    const streamSecure = streamUrl.startsWith('https://');
+
+    const paintStream = () => {
+      streamSlot.innerHTML = `
+        <section class="panel stream" style="margin-bottom:16px">
+          <div class="panel__head">
+            <h2>Stream in browser</h2>
+            <span>${
+              streamUrl
+                ? esc(webStream.source === 'configured' ? 'configured' : savedStream ? 'manual' : 'detected')
+                : 'not set up'
+            }</span>
+          </div>
+          <div class="panel__body">
+            ${
+              streamUrl
+                ? `<p class="pstat">
+                     <span>moonlight-web-stream at <code>${esc(streamUrl)}</code></span>
+                   </p>
+                   ${
+                     streamSecure
+                       ? `<div class="stream__actions">
+                            <button class="btn btn--green btn--sm" type="button" id="stream-open">Open the player here</button>
+                            <a class="btn btn--ghost btn--sm" href="${escAttr(streamUrl)}" target="_blank" rel="noopener noreferrer">Open in a new tab</a>
+                          </div>
+                          <div id="stream-frame"></div>`
+                       : `<div class="stream__actions">
+                            <a class="btn btn--green btn--sm" href="${escAttr(streamUrl)}" target="_blank" rel="noopener noreferrer">Open the player in a new tab</a>
+                          </div>
+                          <p class="diag__warn">
+                            This page is served over HTTPS, so it can only embed another <strong>https</strong> origin —
+                            a plain-http player has to open in its own tab. To watch it inline, give
+                            moonlight-web-stream a certificate: set <code>certificate</code> in its
+                            <code>server/config.json</code>, restart it, then visit it once directly to accept the
+                            certificate.
+                          </p>`
+                   }`
+                : `<p class="loading-note" style="text-align:left">
+                     No moonlight-web-stream server found on that PC.
+                     <a href="https://github.com/MrCreativ3001/moonlight-web-stream" target="_blank" rel="noopener noreferrer">Install it</a>
+                     alongside Sunshine, run its <code>web-server</code>, then reconnect here — or enter its address below
+                     if it runs somewhere else.
+                   </p>`
+            }
+
+            <form class="formrow" id="stream-form" style="justify-content:flex-start;margin-top:6px">
+              <input type="url" id="stream-url" placeholder="https://192.168.1.50:8080" value="${escAttr(savedStream)}" />
+              <button class="btn btn--ghost btn--sm" type="submit">Use this address</button>
+              ${savedStream ? '<button class="btn btn--ghost btn--sm" type="button" id="stream-clear">Clear</button>' : ''}
+            </form>
+
+            ${
+              streaming.moonlightUrl
+                ? `<p class="pstat"><span>Native client</span>
+                     <a class="btn btn--ghost btn--sm" href="${escAttr(streaming.moonlightUrl)}">Open in Moonlight</a></p>`
+                : ''
+            }
+            ${
+              streaming.sunshineWebUi
+                ? `<p class="pstat"><span>Sunshine settings</span>
+                     <a class="btn btn--ghost btn--sm" href="${escAttr(streaming.sunshineWebUi)}" target="_blank" rel="noopener noreferrer">Open</a></p>`
+                : ''
+            }
+            ${!streaming.sunshine ? `<p class="loading-note" style="text-align:left">${esc(streaming.note || '')}</p>` : ''}
+          </div>
+        </section>`;
+
+      $('#stream-open', streamSlot)?.addEventListener('click', () => {
+        const frame = $('#stream-frame', streamSlot);
+        if (frame.querySelector('iframe')) {
+          frame.replaceChildren();
+          $('#stream-open', streamSlot).textContent = 'Open the player here';
+          return;
+        }
+        frame.innerHTML = `<iframe class="stream__frame" src="${escAttr(streamUrl)}"
+            allow="autoplay; fullscreen; gamepad; clipboard-write; encrypted-media"
+            allowfullscreen referrerpolicy="no-referrer"></iframe>`;
+        $('#stream-open', streamSlot).textContent = 'Close the player';
+      });
+
+      $('#stream-form', streamSlot)?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const value = $('#stream-url', streamSlot).value.trim();
+        if (!value) return;
+        localStorage.setItem(STREAM_KEY, value);
+        toast('Stream address saved', 'ok');
+        connect(code);
+      });
+
+      $('#stream-clear', streamSlot)?.addEventListener('click', () => {
+        localStorage.removeItem(STREAM_KEY);
+        connect(code);
+      });
+    };
+
+    paintStream();
 
     const grid = $('#agent-grid', body);
     const filter = $('#agent-filter', body);
@@ -1327,6 +1428,7 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
             (game) => `<div class="installed">
                 ${portraitCardHtml({ appid: game.appid, name: game.name }, { subtitle: game.fullyInstalled ? 'installed' : 'downloading' })}
                 <button class="btn btn--green btn--sm" type="button" data-launch="${game.appid}">▶ Play on PC</button>
+                ${streamUrl ? `<button class="btn btn--ghost btn--sm" type="button" data-stream="${game.appid}">▶ Play &amp; stream</button>` : ''}
               </div>`,
           )
           .join('') || '<p class="loading-note">No installed games match that filter.</p>';
@@ -1337,6 +1439,28 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
     paint();
 
     grid.addEventListener('click', async (event) => {
+      const streamButton = event.target.closest('[data-stream]');
+      if (streamButton) {
+        // Start the game on the PC, then hand the visitor the player.
+        const appid = Number(streamButton.dataset.stream);
+        streamButton.disabled = true;
+        try {
+          await ctx.relay.request('agent', { code, op: 'launch', appid });
+          toast('Game starting — opening the stream', 'ok');
+          if (streamSecure) {
+            $('#stream-open', body)?.click();
+            $('#stream-slot', body)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          } else {
+            window.open(streamUrl, '_blank', 'noopener');
+          }
+        } catch (error) {
+          toast(error.message, 'error', 7000);
+        } finally {
+          streamButton.disabled = false;
+        }
+        return;
+      }
+
       const button = event.target.closest('[data-launch]');
       if (!button) return;
       const appid = Number(button.dataset.launch);
@@ -1378,6 +1502,199 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
   });
 
   if (saved) await connect(saved);
+}
+
+/* ================================================================== *
+ * Diagnostics
+ * ================================================================== */
+
+/** Features this build of the page expects the relay to provide. */
+const EXPECTED_FEATURES = [
+  'trailer-probe',
+  'genre-search',
+  'creator-pages',
+  'discovery-rows',
+  'profile-rich',
+  'profile-keyless',
+  'calculator',
+  'steamspy',
+  'remote-play',
+  'dedupe',
+];
+
+/** Can the browser actually load this media URL? */
+function probeMedia(url, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    const started = performance.now();
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+
+    const finish = (ok, note) => {
+      clearTimeout(timer);
+      video.removeAttribute('src');
+      video.load?.();
+      resolve({ url, ok, ms: Math.round(performance.now() - started), note });
+    };
+
+    const timer = setTimeout(() => finish(false, 'timed out'), timeoutMs);
+    video.addEventListener('loadedmetadata', () => finish(true, `${Math.round(video.duration || 0)}s`), { once: true });
+    video.addEventListener('error', () => finish(false, 'blocked, 404 or unsupported'), { once: true });
+    video.src = url;
+  });
+}
+
+function probeImage(url, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    const started = performance.now();
+    const image = new Image();
+    const finish = (ok, note) => {
+      clearTimeout(timer);
+      resolve({ url, ok, ms: Math.round(performance.now() - started), note });
+    };
+    const timer = setTimeout(() => finish(false, 'timed out'), timeoutMs);
+    image.onload = () => finish(true, `${image.naturalWidth}×${image.naturalHeight}`);
+    image.onerror = () => finish(false, 'blocked or 404');
+    image.src = url;
+  });
+}
+
+const resultRow = (result) =>
+  `<tr class="${result.ok ? 'is-ok' : 'is-bad'}">
+     <td>${result.ok ? '✔' : '✘'}</td>
+     <td class="diag__url">${esc(result.url)}</td>
+     <td>${esc(result.note || '')}</td>
+     <td>${result.ms}ms</td>
+   </tr>`;
+
+export async function diagnosticsView(root, ctx) {
+  ctx.setTitle('Diagnostics · Steam Viewer');
+
+  root.innerHTML = `
+    <div class="breadcrumbs"><a href="#/">Store</a> &rsaquo; Diagnostics</div>
+    <h1 class="apphead__title" style="margin-bottom:6px">Media &amp; relay check</h1>
+    <p class="loading-note" style="text-align:left;margin:0 0 16px">
+      Runs from your browser against your relay and Steam's CDNs. If trailers or images are not showing, this says
+      which part is at fault — screenshot it and it is usually obvious.
+    </p>
+    <div class="toolbar">
+      <input type="number" id="diag-appid" value="620" min="1" style="width:130px" aria-label="App ID to test" />
+      <button class="btn btn--green btn--sm" type="button" id="diag-run">Run the check</button>
+    </div>
+    <div id="diag-out"></div>`;
+
+  const out = $('#diag-out', root);
+
+  const run = async () => {
+    const appid = Number($('#diag-appid', root).value) || 620;
+    out.innerHTML = '<p class="loading-note">Checking…</p>';
+
+    /* 1 — relay identity and feature set */
+    let caps = null;
+    let capsError = null;
+    try {
+      caps = await ctx.relay.request('capabilities', {}, { timeoutMs: 75_000 });
+    } catch (error) {
+      capsError = error.message;
+    }
+
+    const missing = caps ? EXPECTED_FEATURES.filter((feature) => !(caps.features || []).includes(feature)) : [];
+
+    /* 2 — the game payload, and where its trailers point */
+    let game = null;
+    let gameError = null;
+    try {
+      const payload = await ctx.relay.request('app', { appid, cc: ctx.region, l: ctx.language }, { timeoutMs: 75_000 });
+      game = payload.game;
+    } catch (error) {
+      gameError = error.message;
+    }
+
+    const movie = game?.movies?.[0] || null;
+    const sources = movieSources(movie).slice(0, 6);
+
+    out.innerHTML = `
+      <section class="section">
+        <div class="section__head"><h2 class="section__title">Relay</h2></div>
+        <table class="diag">
+          <tr><td>URL</td><td class="diag__url">${esc(ctx.relay.baseUrl || 'not configured')}</td></tr>
+          <tr><td>Transport</td><td>${esc(ctx.relay.state)}</td></tr>
+          <tr><td>Build</td><td>${caps ? esc(caps.build || 'unknown (old relay)') : `<span class="is-bad">unreachable — ${esc(capsError)}</span>`}</td></tr>
+          <tr><td>Steam API key</td><td>${caps ? (caps.apiKey ? 'set' : 'not set (profiles still work)') : '—'}</td></tr>
+          <tr><td>Features</td><td>${
+            !caps
+              ? '—'
+              : missing.length === 0
+                ? '<span class="is-ok">all present</span>'
+                : `<span class="is-bad">missing: ${esc(missing.join(', '))}</span>`
+          }</td></tr>
+        </table>
+        ${
+          caps && missing.length
+            ? `<p class="diag__warn">
+                 Your relay is answering, but it is running older code than this page — it is missing
+                 <strong>${esc(missing.join(', '))}</strong>.
+                 In Render, check that the service's <em>Branch</em> is the branch you are deploying from, then
+                 Manual Deploy ▸ Deploy latest commit. Trailers, genres and profile detail all depend on relay-side
+                 changes.
+               </p>`
+            : ''
+        }
+      </section>
+
+      <section class="section">
+        <div class="section__head"><h2 class="section__title">Trailer sources<small>app ${appid}</small></h2></div>
+        ${
+          gameError
+            ? `<p class="diag__warn">Could not load the game: ${esc(gameError)}</p>`
+            : !movie
+              ? '<p class="loading-note" style="text-align:left">Steam returned no trailers for this app. Try 620 (Portal 2) or 730.</p>'
+              : `<p class="loading-note" style="text-align:left">
+                   Relay sent ${movie.sources ? `${movie.sources.length} probed source(s)` : 'no probed sources (older relay)'};
+                   testing ${sources.length} candidate URL(s) in this browser.
+                 </p>
+                 <table class="diag" id="diag-media"><tbody><tr><td colspan="4">testing…</td></tr></tbody></table>`
+        }
+      </section>
+
+      <section class="section">
+        <div class="section__head"><h2 class="section__title">Image CDNs</h2></div>
+        <table class="diag" id="diag-images"><tbody><tr><td colspan="4">testing…</td></tr></tbody></table>
+      </section>`;
+
+    /* 3 + 4 — try every candidate, and the image hosts, all at once. One
+       unreachable URL must not hold the whole report up. */
+    const mediaDone = sources.length
+      ? Promise.all(sources.map((url) => probeMedia(url))).then((results) => {
+          const anyOk = results.some((result) => result.ok);
+          const table = $('#diag-media tbody', out);
+          if (!table) return;
+          table.innerHTML =
+            results.map(resultRow).join('') +
+            `<tr><td colspan="4">${
+              anyOk
+                ? '<span class="is-ok">At least one source plays — trailers should work on the game page.</span>'
+                : '<span class="is-bad">No source played here. If the relay build above is current too, something between this browser and Steam\'s video CDN is blocking it — a network filter, DNS, a VPN or an extension.</span>'
+            }</td></tr>`;
+        })
+      : Promise.resolve();
+
+    const imagesDone = Promise.all(
+      [
+        `https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/${appid}/header.jpg`,
+        `https://cdn.cloudflare.steamstatic.com/steam/apps/${appid}/header.jpg`,
+        `https://cdn.akamai.steamstatic.com/steam/apps/${appid}/header.jpg`,
+      ].map((url) => probeImage(url)),
+    ).then((results) => {
+      const table = $('#diag-images tbody', out);
+      if (table) table.innerHTML = results.map(resultRow).join('');
+    });
+
+    await Promise.all([mediaDone, imagesDone]);
+  };
+
+  $('#diag-run', root).addEventListener('click', run);
+  await run();
 }
 
 /* ================================================================== *
@@ -1446,13 +1763,21 @@ export function aboutView(root, ctx) {
         the relay so nothing needs port-forwarding.
       </p>
       <p>
-        <strong>The video does not stream into this page.</strong> Moonlight's GameStream protocol and Steam's Remote
-        Play protocol have no browser client, and Valve ships no web SDK for Steam Link — re-implementing either over
-        WebRTC is a separate project. What works instead: install
-        <a href="https://app.lizardbyte.dev/Sunshine/" target="_blank" rel="noopener noreferrer">Sunshine</a> on the PC,
-        and the Stream button hands off to your native
-        <a href="https://moonlight-stream.org/" target="_blank" rel="noopener noreferrer">Moonlight</a> client already
-        pointed at the right machine, with the game already starting.
+        For video in the browser, install
+        <a href="https://app.lizardbyte.dev/Sunshine/" target="_blank" rel="noopener noreferrer">Sunshine</a> and
+        <a href="https://github.com/MrCreativ3001/moonlight-web-stream" target="_blank" rel="noopener noreferrer">moonlight-web-stream</a>
+        on the same PC. The agent finds it and the player appears on the Remote Play page, with a
+        <em>Play &amp; stream</em> button on every installed game. Give it a certificate in its
+        <code>server/config.json</code> and it embeds inline; without one it opens in its own tab, because an HTTPS
+        page cannot embed a plain-http origin. A native
+        <a href="https://moonlight-stream.org/" target="_blank" rel="noopener noreferrer">Moonlight</a> client is
+        detected too.
+      </p>
+      <h2>If something looks broken</h2>
+      <p>
+        <a href="#/diagnostics">Run the media check</a>. It reports which relay you are on, whether its build has every
+        feature this page expects, and which Steam CDN hosts actually answer from your browser. A relay deploying from
+        an older branch is by far the most common cause, and it says so plainly.
       </p>
       <h2>Keyboard</h2>
       <ul>

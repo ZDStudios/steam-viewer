@@ -12,6 +12,27 @@ import * as stats from './stats.js';
 import * as agents from './agents.js';
 import { cache, SteamError, TTL } from './steam.js';
 
+/**
+ * Bumped whenever the relay gains a capability the page can depend on. The
+ * diagnostics view compares this against what it expects, so "the relay is
+ * deploying from the wrong branch" is distinguishable from "the feature is
+ * broken" — they look identical from the browser otherwise.
+ */
+export const BUILD = '2026-07-31.3';
+
+export const FEATURES = [
+  'trailer-probe', // movies carry a probed `sources` list
+  'genre-search', // genres via /search/results rather than getappsingenre
+  'creator-pages', // developer / publisher catalogues
+  'discovery-rows', // home-page recommendation rows
+  'profile-rich', // recent activity, achievements, friends
+  'profile-keyless', // profiles without STEAM_API_KEY
+  'calculator', // account value
+  'steamspy', // ownership estimates
+  'remote-play', // paired agents
+  'dedupe', // collapsed duplicate storefront rows
+];
+
 const str = (value, fallback = '') => (typeof value === 'string' ? value.trim() : fallback);
 const clampCc = (value) => (/^[a-z]{2}$/i.test(str(value)) ? str(value).toLowerCase() : 'us');
 const clampLang = (value) => (/^[a-z_]{2,20}$/i.test(str(value)) ? str(value).toLowerCase() : 'english');
@@ -418,6 +439,14 @@ export const ACTIONS = {
       apiKey: steam.hasApiKey(),
       genres: discover.GENRES,
       remotePlay: true,
+      build: BUILD,
+      /**
+       * Named capabilities the page can test for. A relay deploying from a
+       * stale branch answers without these, which is what the diagnostics
+       * page checks — a mismatched relay looks exactly like a broken feature
+       * otherwise.
+       */
+      features: FEATURES,
     }),
   },
 };

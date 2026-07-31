@@ -14,7 +14,7 @@ import cors from 'cors';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 
-import { ACTIONS, runAction } from './actions.js';
+import { ACTIONS, BUILD, FEATURES, runAction } from './actions.js';
 import * as agents from './agents.js';
 import { cache, hasApiKey, internals, SteamError } from './steam.js';
 
@@ -82,6 +82,8 @@ app.get('/healthz', (req, res) => {
     cache: cache.stats(),
     steam: internals.limiter.stats(),
     apiKey: hasApiKey(),
+    build: BUILD,
+    features: FEATURES,
     ...agents.stats(),
   });
 });
@@ -109,7 +111,8 @@ app.get('/', (req, res) => {
     <li><a href="/api/search?term=portal">/api/search?term=portal</a></li>
     <li><a href="/api/app?appid=620">/api/app?appid=620</a></li>
   </ul>
-  <p>Library view: ${hasApiKey() ? 'enabled' : 'disabled (set STEAM_API_KEY to enable)'}</p>
+  <p>Build: <code>${BUILD}</code></p>
+  <p>Steam API key: ${hasApiKey() ? 'set (richer profiles)' : 'not set (profiles still work via community XML)'}</p>
 </main>`);
 });
 
@@ -250,7 +253,10 @@ wss.on('connection', (socket, req) => {
       server: 'steam-viewer-relay',
       version: 1,
       actions: Object.keys(ACTIONS),
-      library: hasApiKey(),
+      library: true,
+      apiKey: hasApiKey(),
+      build: BUILD,
+      features: FEATURES,
       liveIntervalMs: LIVE_INTERVAL_MS,
     },
   });

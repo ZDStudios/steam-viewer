@@ -8,6 +8,7 @@ import {
   appView,
   browseView,
   creatorView,
+  diagnosticsView,
   genreView,
   homeView,
   libraryView,
@@ -400,6 +401,9 @@ async function route(force = false) {
         break;
       case 'about':
         result = aboutView(main, ctx);
+        break;
+      case 'diagnostics':
+        result = await diagnosticsView(main, ctx);
         break;
       default:
         main.innerHTML = '<div class="empty"><h2>Page not found</h2><p><a href="#/">Back to the store</a></p></div>';

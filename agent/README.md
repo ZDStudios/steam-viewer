@@ -18,26 +18,38 @@ It prints a **pairing code**. Enter that on the site under **Remote Play**.
 | Reads your installed games | ✅ from `steamapps/appmanifest_*.acf` — no login, no password |
 | Launches a game remotely | ✅ hands `steam://rungameid/<id>` to your Steam client |
 | Rescans when you install something | ✅ every 5 minutes, configurable |
-| Streams video into the browser | ❌ see below |
+| Streams video into the browser | ✅ via [moonlight-web-stream](https://github.com/MrCreativ3001/moonlight-web-stream) |
 | Closes a running game | ❌ Steam has no protocol handler for it |
 
-### Why the video isn't in the browser
+### Watching in the browser
 
-A web page cannot decode NVIDIA GameStream (what Moonlight speaks) or Steam's
-Remote Play protocol — neither has a browser client, and Valve ships no web SDK
-for Steam Link. Rewriting either as WebRTC is a project in its own right.
+Install on the gaming PC:
 
-What the agent does instead is detect a **Sunshine** host on your PC and give
-the site a `moonlight://<your-ip>` link. Clicking **Stream** launches your
-installed Moonlight client already pointed at the right machine, and the
-**Play** button starts the game on the PC so it is ready when Moonlight opens.
+1. [Sunshine](https://app.lizardbyte.dev/Sunshine/) — the streaming host.
+2. [moonlight-web-stream](https://github.com/MrCreativ3001/moonlight-web-stream) —
+   a Rust web server that forwards a Sunshine stream to a browser over WebRTC.
+   Build it, run its `web-server`, and add your PC inside its own UI with the
+   address `localhost`, then pair it.
 
-To enable that path, install:
+The agent probes port **8080** (override with `--web-stream-port`) and reports
+the address to the site, which then shows a **Stream in browser** panel and a
+**Play & stream** button on every installed game — that starts the game and
+opens the player.
 
-- [Sunshine](https://app.lizardbyte.dev/Sunshine/) on the gaming PC (the host)
-- [Moonlight](https://moonlight-stream.org/) on whatever you are watching from
+**Give it a certificate if you want the player inline.** Steam Viewer is served
+over HTTPS, and a browser will not embed a plain-`http` origin inside an
+`https` page. Set `certificate` in moonlight-web-stream's `server/config.json`,
+restart it, and visit it once directly to accept the certificate — after that
+the player embeds in the page. Without a certificate everything still works,
+the player just opens in its own tab.
 
-The agent looks for Sunshine on ports 47989/47990 and reports what it finds.
+If it runs on another machine or behind a reverse proxy, pass
+`--web-stream-url https://host:port` (or set it in the site's Remote Play page,
+which overrides whatever the agent reports).
+
+A native [Moonlight](https://moonlight-stream.org/) client is still detected
+too — the agent looks for Sunshine on ports 47989/47990 and offers a
+`moonlight://` hand-off if you prefer it.
 
 ## Security
 
@@ -59,6 +71,8 @@ pin one with `--code` only if you understand that.
 | `--steam-root <path>` | Steam directory, if auto-detection misses it |
 | `--no-launch` | Read-only mode |
 | `--refresh-seconds <n>` | Library rescan interval (default 300, minimum 60) |
+| `--web-stream-port <n>` | Port moonlight-web-stream listens on (default 8080) |
+| `--web-stream-url <url>` | Its address, if it runs elsewhere or behind a proxy |
 
 Steam is auto-detected in the usual places on Windows, macOS and Linux
 (including Flatpak), and every extra library drive listed in

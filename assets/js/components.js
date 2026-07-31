@@ -408,19 +408,30 @@ export function mountPlayer(root, media, { onZoom } = {}) {
       // Access-Control-Allow-Origin, so requesting a CORS fetch makes the
       // browser refuse every trailer.
 
-      // Steam offers the same trailer at several bitrates and in two
-      // containers; walk them until one plays.
-      const sources = (entry.sources || [entry.src]).filter(Boolean);
+      // Steam offers the same trailer at several bitrates, in two containers,
+      // across several CDN hosts. Walk the list until one plays; cap the
+      // attempts so a dead trailer cannot spin forever.
+      const sources = (entry.sources || [entry.src]).filter(Boolean).slice(0, 10);
+      const tried = [];
       let attempt = 0;
+
       const tryNext = () => {
         if (attempt >= sources.length) {
           stage.replaceChildren(
-            el(`<p class="loading-note">This trailer would not play.
-                <a href="${escAttr(sources[0] || '#')}" target="_blank" rel="noopener noreferrer">Open it directly</a>.</p>`),
+            el(`<div class="player__failed">
+                  <p>This trailer would not load.</p>
+                  <p><a href="${escAttr(sources[0] || '#')}" target="_blank" rel="noopener noreferrer">Open it directly</a>
+                     &middot; <a href="#/diagnostics">Run the media check</a></p>
+                  <details><summary>${tried.length} URL${tried.length === 1 ? '' : 's'} tried</summary>
+                    <ol>${tried.map((url) => `<li>${esc(url)}</li>`).join('')}</ol>
+                  </details>
+                </div>`),
           );
           return;
         }
-        video.src = sources[attempt++];
+        const next = sources[attempt++];
+        tried.push(next);
+        video.src = next;
         video.load();
       };
       video.addEventListener('error', tryNext);

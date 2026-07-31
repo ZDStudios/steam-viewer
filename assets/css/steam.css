@@ -2365,3 +2365,105 @@ a.chip:hover {
     text-align: left;
   }
 }
+
+/* =====================================================================
+   Diagnostics
+   ===================================================================== */
+
+.diag {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.diag td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  vertical-align: top;
+}
+.diag tr:last-child td {
+  border-bottom: 0;
+}
+.diag td:first-child {
+  color: var(--text-dim);
+  white-space: nowrap;
+  width: 1%;
+}
+.diag__url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.diag .is-ok,
+.diag tr.is-ok td:first-child {
+  color: var(--green);
+}
+.diag .is-bad,
+.diag tr.is-bad td:first-child {
+  color: var(--negative);
+}
+.diag__warn {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border-left: 3px solid var(--gold);
+  border-radius: 2px;
+  background: rgba(255, 200, 44, 0.08);
+  font-size: 13px;
+  color: var(--text);
+}
+.diag__warn strong {
+  color: var(--gold);
+}
+
+.player__failed {
+  padding: 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.player__failed details {
+  margin-top: 10px;
+  text-align: left;
+}
+.player__failed summary {
+  cursor: pointer;
+}
+.player__failed ol {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+/* =====================================================================
+   In-browser streaming (moonlight-web-stream)
+   ===================================================================== */
+
+.stream__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.stream__frame {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin-top: 12px;
+  border: 0;
+  border-radius: var(--radius);
+  background: #000;
+  display: block;
+}
+.stream .pstat code {
+  font-size: 11px;
+  color: var(--blue);
+  overflow-wrap: anywhere;
+}
+.stream .diag__warn {
+  margin-top: 10px;
+}
+.installed .btn {
+  width: 100%;
+}
