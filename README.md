@@ -210,6 +210,21 @@ store page. The sanitiser allows `<video>`/`<source>` from https origins and re-
 (muted, looping, autoplaying, no controls), so the animation shows without the markup being able to add sound or
 grab focus.
 
+## Slow or blocked Steam CDNs
+
+Steam's asset hosts are fast from some networks and unusable from others. Any
+image that has not produced pixels within **3 seconds** is re-requested through
+the relay's `GET /media?url=…` endpoint, which streams the asset back with a
+day of cache headers. Trailers append the same route as their final source.
+
+It is not an open proxy: only Steam's own asset hosts pass the allow-list, only
+image/video/audio responses are returned, `Range` is forwarded so video seeking
+still works, and it has its own per-IP rate limit (`MEDIA_LIMIT_PER_MIN`,
+default 900). Size is capped by `MEDIA_MAX_BYTES` (default 64 MB).
+
+On Render's free tier this costs bandwidth, so it only ever engages as a
+fallback — a healthy connection to Steam never touches it.
+
 ## When something is not showing
 
 Open **[#/diagnostics](#)** from the footer link. It runs from your browser and reports:

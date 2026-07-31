@@ -51,6 +51,30 @@ A native [Moonlight](https://moonlight-stream.org/) client is still detected
 too — the agent looks for Sunshine on ports 47989/47990 and offers a
 `moonlight://` hand-off if you prefer it.
 
+## "self-signed certificate in certificate chain"
+
+Node ships its own list of trusted certificate authorities and **ignores the
+one Windows keeps**. If antivirus or a corporate proxy inspects HTTPS traffic,
+it re-signs certificates with a root that Windows trusts and Node does not —
+so a perfectly valid Render URL is rejected.
+
+The agent detects this, retries itself with `--use-system-ca` (Node 22.15+),
+and if that is unavailable prints the alternatives:
+
+```powershell
+# 1. best: let Node read the Windows certificate store
+npm start -- --relay https://your-service.onrender.com --use-system-ca
+
+# 2. point at your security software's root certificate
+npm start -- --relay https://your-service.onrender.com --ca C:\path\to\root.pem
+
+# 3. last resort, skips verification
+npm start -- --relay https://your-service.onrender.com --insecure
+```
+
+Turning off HTTPS/SSL scanning for the relay's hostname in that software works
+too, and is the cleanest fix if you control the setting.
+
 ## Security
 
 The pairing code is the only credential — **anyone who has it can list and
@@ -73,6 +97,8 @@ pin one with `--code` only if you understand that.
 | `--refresh-seconds <n>` | Library rescan interval (default 300, minimum 60) |
 | `--web-stream-port <n>` | Port moonlight-web-stream listens on (default 8080) |
 | `--web-stream-url <url>` | Its address, if it runs elsewhere or behind a proxy |
+| `--ca <path>` | Extra CA certificate to trust (PEM) |
+| `--insecure` | Skip certificate verification. Last resort |
 
 Steam is auto-detected in the usual places on Windows, macOS and Linux
 (including Flatpak), and every extra library drive listed in

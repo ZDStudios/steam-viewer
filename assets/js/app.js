@@ -1,7 +1,7 @@
 /** Boot, header wiring and the hash router. */
 import { normalizeBase, Relay } from './client.js';
 import { toast } from './components.js';
-import { $, $$, attachImageFallbacks, debounce, esc, escAttr, formatMoney, REGIONS, scrollToTop } from './util.js';
+import { $, $$, attachImageFallbacks, debounce, esc, escAttr, formatMoney, REGIONS, scrollToTop, setMediaProxy } from './util.js';
 import * as wishlist from './wishlist.js';
 import {
   aboutView,
@@ -44,6 +44,7 @@ const FALLBACK_GENRES = [
  * ------------------------------------------------------------------ */
 
 const relay = new Relay(resolveServerUrl());
+setMediaProxy(relay.baseUrl);
 
 const ctx = {
   relay,
@@ -85,6 +86,8 @@ const CONN_LABELS = {
 };
 
 relay.on('state', ({ state, detail, baseUrl }) => {
+  // Assets that stall on Steam's CDN get re-requested through the relay.
+  setMediaProxy(baseUrl);
   const [className, label] = CONN_LABELS[state] || CONN_LABELS.offline;
   connPill.className = `conn ${className}`;
   $('.conn__label', connPill).textContent = label;

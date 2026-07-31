@@ -123,6 +123,29 @@ export function plainText(html, limit = 260) {
  * Misc
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * Media proxy
+ * ------------------------------------------------------------------ */
+
+let mediaProxyBase = '';
+
+/** Point the asset fallbacks at a relay that can re-serve Steam media. */
+export function setMediaProxy(baseUrl) {
+  mediaProxyBase = String(baseUrl || '').replace(/\/+$/, '');
+}
+
+export const hasMediaProxy = () => Boolean(mediaProxyBase);
+
+/** Rewrite a Steam asset URL to go through the relay instead. */
+export function proxied(url) {
+  if (!mediaProxyBase || !url) return null;
+  if (url.startsWith(mediaProxyBase)) return null; // already proxied
+  return `${mediaProxyBase}/media?url=${encodeURIComponent(url)}`;
+}
+
+/** How long an image may take before we give up on Steam's CDN. */
+export const SLOW_IMAGE_MS = 3000;
+
 /** Move an image on to the next candidate URL in its fallback chain. */
 function advanceImage(img) {
   const remaining = (img.dataset.fallback || '').split('|').filter(Boolean);
@@ -130,29 +153,67 @@ function advanceImage(img) {
   img.dataset.fallback = remaining.join('|');
 
   if (candidate) {
+    watchImage(img, candidate);
     img.src = candidate;
     return;
   }
+
+  // Last resort: pull it through the relay, which often has a better route to
+  // Steam than the visitor does.
+  const viaRelay = img.dataset.proxied ? null : proxied(img.dataset.originalSrc || img.currentSrc || img.src);
+  if (viaRelay) {
+    img.dataset.proxied = '1';
+    img.src = viaRelay;
+    return;
+  }
+
   img.removeAttribute('src');
   img.classList.add('is-missing');
   img.parentElement?.classList.add('has-missing-image');
 }
 
 /**
+ * Give a URL `SLOW_IMAGE_MS` to produce pixels; after that, re-request it
+ * through the relay. Steam's CDNs are quick from some networks and unusable
+ * from others, and a stalled request never fires `error`.
+ */
+function watchImage(img, url) {
+  clearTimeout(Number(img.dataset.slowTimer) || 0);
+  if (!mediaProxyBase || img.dataset.proxied) return;
+
+  const timer = setTimeout(() => {
+    if (img.complete && img.naturalWidth > 0) return;
+    const viaRelay = proxied(url);
+    if (!viaRelay) return;
+    img.dataset.proxied = '1';
+    img.src = viaRelay;
+  }, SLOW_IMAGE_MS);
+
+  img.dataset.slowTimer = String(timer);
+  img.addEventListener('load', () => clearTimeout(timer), { once: true });
+}
+
+/**
  * Swap in the next CDN candidate when a Steam asset 404s — common for older
- * apps, and for art Valve has moved between hosts.
+ * apps, and for art Valve has moved between hosts — and fall back to the
+ * relay for anything slow or blocked.
  */
 export function attachImageFallbacks(root = document) {
   for (const img of $$('img[data-fallback]', root)) {
     if (img.dataset.fallbackBound) continue;
     img.dataset.fallbackBound = '1';
+
+    const src = img.getAttribute('src');
+    if (src) img.dataset.originalSrc = src;
+
     img.addEventListener('error', () => advanceImage(img));
 
     // The browser starts loading as soon as innerHTML is assigned, which is
     // before this listener exists. Anything that already failed (or was given
     // an empty src) has to be caught by hand.
-    if (!img.getAttribute('src')) advanceImage(img);
+    if (!src) advanceImage(img);
     else if (img.complete && img.naturalWidth === 0) advanceImage(img);
+    else if (!img.complete) watchImage(img, src);
   }
 }
 
@@ -203,7 +264,13 @@ export function movieSources(movie) {
   const legacy = [movie.mp4, movie.mp4Low, movie.webm, movie.webmLow].filter(Boolean);
 
   const expanded = [...provided, ...legacy].flatMap(videoCandidates);
-  return expanded.filter((url, index, all) => url && all.indexOf(url) === index);
+  const direct = expanded.filter((url, index, all) => url && all.indexOf(url) === index);
+
+  // If every CDN host is unreachable from here, the relay usually still has a
+  // route to Steam — so it is appended as the final source rather than the
+  // player giving up.
+  const viaRelay = direct.slice(0, 2).map(proxied).filter(Boolean);
+  return [...direct, ...viaRelay];
 }
 
 export function scrollToTop() {

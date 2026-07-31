@@ -9,6 +9,8 @@
  * everything cached in memory.
  */
 import http from 'node:http';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import compression from 'compression';
 import cors from 'cors';
 import express from 'express';
@@ -16,7 +18,7 @@ import { WebSocketServer } from 'ws';
 
 import { ACTIONS, BUILD, FEATURES, runAction } from './actions.js';
 import * as agents from './agents.js';
-import { cache, hasApiKey, internals, SteamError } from './steam.js';
+import { cache, hasApiKey, internals, SteamError, USER_AGENT } from './steam.js';
 
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -110,6 +112,7 @@ app.get('/', (req, res) => {
     <li><a href="/api/capabilities">/api/capabilities</a></li>
     <li><a href="/api/search?term=portal">/api/search?term=portal</a></li>
     <li><a href="/api/app?appid=620">/api/app?appid=620</a></li>
+    <li><code>/media?url=&lt;steam asset&gt;</code> — asset proxy for slow CDNs</li>
   </ul>
   <p>Build: <code>${BUILD}</code></p>
   <p>Steam API key: ${hasApiKey() ? 'set (richer profiles)' : 'not set (profiles still work via community XML)'}</p>
@@ -137,6 +140,125 @@ async function handleRest(req, res) {
     });
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Media proxy
+ * ------------------------------------------------------------------ */
+
+/**
+ * Steam's CDNs are fast from some networks and glacial from others, and a few
+ * ISPs throttle or block them outright. `GET /media?url=…` re-serves a Steam
+ * asset through the relay, which the page falls back to when an image has not
+ * arrived within a few seconds.
+ *
+ * It is not an open proxy: only Steam's own asset hosts are reachable, and
+ * only image and video responses are passed back.
+ */
+const MEDIA_HOSTS = [
+  /(^|\.)steamstatic\.com$/i,
+  /(^|\.)akamaihd\.net$/i,
+  /(^|\.)steampowered\.com$/i,
+  /(^|\.)steamcommunity\.com$/i,
+  /(^|\.)valvesoftware\.com$/i,
+];
+
+const MEDIA_TYPES = /^(image|video|audio)\//i;
+const MEDIA_MAX_BYTES = Number(process.env.MEDIA_MAX_BYTES || 64 * 1024 * 1024);
+
+function allowedMediaUrl(raw) {
+  if (!raw || typeof raw !== 'string' || raw.length > 2048) return null;
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  if (!MEDIA_HOSTS.some((pattern) => pattern.test(url.hostname))) return null;
+  url.protocol = 'https:';
+  return url.toString();
+}
+
+const mediaBuckets = new Map();
+const MEDIA_LIMIT = Number(process.env.MEDIA_LIMIT_PER_MIN || 900);
+
+function mediaThrottle(req, res, next) {
+  const ip = req.ip || 'unknown';
+  const now = Date.now();
+  const bucket = mediaBuckets.get(ip);
+
+  if (!bucket || now > bucket.resetAt) {
+    mediaBuckets.set(ip, { count: 1, resetAt: now + 60_000 });
+    if (mediaBuckets.size > 5000) mediaBuckets.clear();
+    return next();
+  }
+  bucket.count += 1;
+  if (bucket.count > MEDIA_LIMIT) {
+    res.status(429).end();
+    return undefined;
+  }
+  return next();
+}
+
+app.get('/media', mediaThrottle, async (req, res) => {
+  const target = allowedMediaUrl(req.query.url);
+  if (!target) {
+    res.status(400).json({ ok: false, error: { message: 'That URL is not a Steam asset', status: 400 } });
+    return;
+  }
+
+  let upstream;
+  try {
+    upstream = await fetch(target, {
+      headers: {
+        'User-Agent': USER_AGENT,
+        Accept: '*/*',
+        // Forwarded so the browser can still seek within a video.
+        ...(req.headers.range ? { Range: req.headers.range } : {}),
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error) {
+    res.status(504).json({ ok: false, error: { message: `Upstream fetch failed: ${error.message}`, status: 504 } });
+    return;
+  }
+
+  const type = upstream.headers.get('content-type') || '';
+  if (!MEDIA_TYPES.test(type)) {
+    upstream.body?.cancel?.().catch(() => {});
+    res.status(415).json({ ok: false, error: { message: 'Upstream did not return media', status: 415 } });
+    return;
+  }
+
+  const length = Number(upstream.headers.get('content-length'));
+  if (Number.isFinite(length) && length > MEDIA_MAX_BYTES) {
+    upstream.body?.cancel?.().catch(() => {});
+    res.status(413).json({ ok: false, error: { message: 'Asset too large to proxy', status: 413 } });
+    return;
+  }
+
+  res.status(upstream.status);
+  for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+    const value = upstream.headers.get(header);
+    if (value) res.setHeader(header, value);
+  }
+  // Steam assets are immutable per URL, so let browsers keep them.
+  res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+
+  if (!upstream.body) {
+    res.end();
+    return;
+  }
+
+  try {
+    await pipeline(Readable.fromWeb(upstream.body), res);
+  } catch {
+    // Client navigated away mid-download; nothing to report.
+    res.destroy();
+  }
+});
 
 app.get('/api/:action', throttle, handleRest);
 app.post('/api/:action', throttle, handleRest);

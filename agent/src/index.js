@@ -14,7 +14,8 @@
  * it can list and launch your installed games, so treat it like a password —
  * it changes every time the agent restarts unless you pin one with --code.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import net from 'node:net';
 import tls from 'node:tls';
 import os from 'node:os';
@@ -58,6 +59,41 @@ const REFRESH_MS = Number(options['refresh-seconds'] || 300) * 1000;
 const WEB_STREAM_PORT = Number(options['web-stream-port'] || 8080);
 const WEB_STREAM_URL = options['web-stream-url'] || process.env.STEAM_VIEWER_WEB_STREAM || null;
 
+/**
+ * TLS.
+ *
+ * Node ships its own CA bundle and ignores the operating system's, so on a PC
+ * where antivirus or a corporate proxy inspects HTTPS the re-signed
+ * certificate is trusted by Windows but not by Node — which surfaces as
+ * "self-signed certificate in certificate chain" against a perfectly valid
+ * Render URL.
+ *
+ * `--use-system-ca` (Node 22.15+) makes Node read the OS trust store, which
+ * fixes it properly. The agent re-execs itself with that flag on the first
+ * certificate failure rather than making the user work it out.
+ */
+const EXTRA_CA = options.ca || process.env.NODE_EXTRA_CA_CERTS || null;
+const INSECURE = options.insecure === 'true';
+const SYSTEM_CA_RETRIED = process.env.STEAM_VIEWER_SYSTEM_CA === '1';
+
+const CERT_ERRORS = new Set([
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'CERT_UNTRUSTED',
+]);
+
+const isCertError = (error) =>
+  Boolean(error) && (CERT_ERRORS.has(error.code) || /self-signed certificate|unable to verify|certificate chain/i.test(error.message || ''));
+
+/** Does this Node build understand --use-system-ca? */
+function supportsSystemCa() {
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  return major > 22 || (major === 22 && minor >= 15);
+}
+
 const randomCode = (length = 8) =>
   [...crypto.getRandomValues(new Uint8Array(length))].map((byte) => ALPHABET[byte % ALPHABET.length]).join('');
 
@@ -80,6 +116,9 @@ Options
   --web-stream-port <n>  Port moonlight-web-stream listens on (default 8080)
   --web-stream-url <url> Its address, if it runs on another machine or behind
                          a reverse proxy (skips auto-detection)
+  --ca <path>            Extra CA certificate to trust (PEM). Needed when
+                         antivirus or a corporate proxy inspects HTTPS.
+  --insecure             Skip certificate verification entirely. Last resort.
 `);
   process.exit(1);
 }
@@ -255,6 +294,7 @@ const asPayload = () =>
 
 let socket = null;
 let attempts = 0;
+let lastError = null;
 let refreshTimer = null;
 
 function websocketUrl() {
@@ -323,13 +363,71 @@ async function handleOperation(message) {
   }
 }
 
+function tlsOptions() {
+  const options = {};
+  if (INSECURE) options.rejectUnauthorized = false;
+  if (EXTRA_CA) {
+    try {
+      options.ca = fs.readFileSync(EXTRA_CA);
+    } catch (error) {
+      console.warn(`[agent] could not read --ca ${EXTRA_CA}: ${error.message}`);
+    }
+  }
+  return options;
+}
+
+/**
+ * Re-launch this process with --use-system-ca so Node trusts the certificates
+ * Windows already trusts. Returns false if that is not possible, in which case
+ * the caller prints instructions instead.
+ */
+function retryWithSystemCa() {
+  if (SYSTEM_CA_RETRIED || INSECURE || !supportsSystemCa()) return false;
+
+  console.log('\n[agent] certificate rejected — retrying with the system certificate store…\n');
+
+  const result = spawnSync(
+    process.execPath,
+    ['--use-system-ca', ...process.execArgv.filter((arg) => arg !== '--use-system-ca'), ...process.argv.slice(1)],
+    { stdio: 'inherit', env: { ...process.env, STEAM_VIEWER_SYSTEM_CA: '1' } },
+  );
+
+  process.exit(result.status ?? 1);
+}
+
+function explainCertFailure(message) {
+  console.error(`
+[agent] Could not verify the relay's certificate: ${message}
+
+  Node uses its own list of trusted certificate authorities and ignores the
+  one Windows keeps, so this usually means antivirus or a company proxy is
+  inspecting HTTPS traffic and re-signing it. The relay itself is fine.
+
+  Fixes, best first:
+
+    1. Update Node to 22.15 or newer, then run:
+         npm start -- --relay ${RELAY} --use-system-ca
+       (this agent tries that automatically when it can)
+
+    2. Export your security software's root certificate and point at it:
+         npm start -- --relay ${RELAY} --ca C:\\path\\to\\root.pem
+       or set NODE_EXTRA_CA_CERTS to the same file.
+
+    3. Turn off HTTPS/SSL scanning for ${RELAY} in that software.
+
+    4. Last resort, skips verification entirely:
+         npm start -- --relay ${RELAY} --insecure
+`);
+}
+
 async function connect() {
   const streaming = await streamingStatus();
 
-  socket = new WebSocket(websocketUrl());
+  socket = new WebSocket(websocketUrl(), tlsOptions());
 
   socket.on('open', () => {
     attempts = 0;
+    lastError = null;
     socket.send(
       JSON.stringify({
         type: 'register',
@@ -372,6 +470,15 @@ async function connect() {
   });
 
   socket.on('close', () => {
+    // A certificate failure will not fix itself by reconnecting.
+    if (lastError && isCertError(lastError)) {
+      if (retryWithSystemCa() === false) {
+        explainCertFailure(lastError.message);
+        process.exit(1);
+      }
+      return;
+    }
+
     attempts += 1;
     const delay = Math.min(2000 * 2 ** (attempts - 1), 30_000);
     console.log(`[agent] disconnected — reconnecting in ${Math.round(delay / 1000)}s`);
@@ -379,8 +486,9 @@ async function connect() {
   });
 
   socket.on('error', (error) => {
-    // `close` follows and schedules the retry.
-    if (attempts === 0) console.error(`[agent] connection error: ${error.message}`);
+    lastError = error;
+    // `close` follows and decides what to do about it.
+    if (attempts === 0 && !isCertError(error)) console.error(`[agent] connection error: ${error.message}`);
   });
 }
 
@@ -395,6 +503,9 @@ await scanLibrary();
 console.log(`  steam: ${steamRoot || 'not found'}`);
 console.log(`  games: ${installed.length} installed`);
 if (!ALLOW_LAUNCH) console.log('  mode:  read-only (--no-launch)');
+if (INSECURE) console.log('  tls:   verification DISABLED (--insecure)');
+else if (SYSTEM_CA_RETRIED) console.log('  tls:   using the system certificate store');
+else if (EXTRA_CA) console.log(`  tls:   trusting extra CA ${EXTRA_CA}`);
 
 await connect();
 
