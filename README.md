@@ -168,7 +168,19 @@ It prints a pairing code; enter that under **Remote Play** on the site. It reads
 `appmanifest_*.acf` files, launches them with `steam://rungameid/<id>`, and dials *out* to the relay so nothing
 needs port-forwarding. It never sees your Steam password.
 
-### Watching in the browser
+### Watching in the browser (built in)
+
+With **ffmpeg** installed on the gaming PC, the agent streams the screen to the
+site by itself — no Sunshine, no second server. It captures the desktop,
+encodes to whichever codec the browser reports it can decode (H.264 in
+fragmented MP4, or VP8 in WebM for browsers without proprietary codecs), and
+pushes fragments down the connection the agent already holds. The page feeds
+them into a MediaSource, so there is no plugin and nothing to port-forward.
+
+About a second of latency, and no input forwarding: it is a view of the screen,
+which suits watching a game rather than playing one.
+
+### Playing in the browser (Moonlight)
 
 Install [Sunshine](https://app.lizardbyte.dev/Sunshine/) and
 [moonlight-web-stream](https://github.com/MrCreativ3001/moonlight-web-stream) on the gaming PC. The agent detects

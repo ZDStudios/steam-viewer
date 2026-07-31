@@ -83,6 +83,8 @@ export class Relay {
     let socket;
     try {
       socket = new WebSocket(websocketUrl(this.baseUrl));
+      // Screen-stream fragments arrive as binary frames on this same socket.
+      socket.binaryType = 'arraybuffer';
     } catch (error) {
       this.#scheduleReconnect(error?.message || 'WebSocket unavailable');
       return;
@@ -145,6 +147,12 @@ export class Relay {
   }
 
   #onMessage(event) {
+    // Binary is always screen-stream payload; JSON is everything else.
+    if (typeof event.data !== 'string') {
+      this.emit('stream-chunk', event.data);
+      return;
+    }
+
     let message;
     try {
       message = JSON.parse(event.data);

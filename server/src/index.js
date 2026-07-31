@@ -308,7 +308,13 @@ agentWss.on('connection', (socket) => {
     socket.isAlive = true;
   });
 
-  socket.on('message', (raw) => {
+  socket.on('message', (raw, isBinary) => {
+    // Binary from an agent is always screen-stream payload.
+    if (isBinary) {
+      agents.pushStream(socket, raw);
+      return;
+    }
+
     let message;
     try {
       message = JSON.parse(raw.toString());
@@ -409,6 +415,22 @@ wss.on('connection', (socket, req) => {
       return;
     }
 
+    // Watching an agent's screen is connection state, not a Steam call.
+    if (action === 'stream.watch' || action === 'stream.leave') {
+      try {
+        if (action === 'stream.leave') {
+          agents.removeViewer(socket);
+          send(socket, { id, ok: true, action, data: { watching: false } });
+        } else {
+          const info = agents.addViewer(String(params.code || ''), socket);
+          send(socket, { id, ok: true, action, data: { watching: true, ...info } });
+        }
+      } catch (error) {
+        send(socket, { id, ok: false, action, error: { message: error.message, status: error.status || 500 } });
+      }
+      return;
+    }
+
     // Subscriptions are connection state, not Steam calls.
     if (action === 'subscribe' || action === 'unsubscribe') {
       const id64 = Number(params.appid);
@@ -432,13 +454,12 @@ wss.on('connection', (socket, req) => {
     }
   });
 
-  socket.on('close', () => {
+  const cleanup = () => {
     socket.subscriptions?.clear();
-  });
-
-  socket.on('error', () => {
-    socket.subscriptions?.clear();
-  });
+    agents.removeViewer(socket);
+  };
+  socket.on('close', cleanup);
+  socket.on('error', cleanup);
 });
 
 /** Drop half-open sockets — Render's proxy will not always close them for us. */

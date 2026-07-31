@@ -50,7 +50,23 @@ export function register({ socket, code, info = {}, games = [] }) {
     connectedAt: Date.now(),
     lastSeen: Date.now(),
     pending: new Map(),
+    // Browser sockets watching this PC's screen, plus the fMP4 header so a
+    // late joiner can start decoding immediately.
+    viewers: new Set(),
+    streamInit: null,
   };
+
+  // A reconnecting agent keeps its audience.
+  if (existing) {
+    entry.viewers = existing.viewers;
+    for (const viewer of entry.viewers) {
+      try {
+        viewer.send(JSON.stringify({ event: 'stream', data: { state: 'agent-reconnected', code: key } }));
+      } catch {
+        /* viewer gone */
+      }
+    }
+  }
 
   agents.set(key, entry);
   bySocket.set(socket, entry);
@@ -62,6 +78,16 @@ export function unregister(socket) {
   if (!entry) return;
   bySocket.delete(socket);
   if (agents.get(entry.code) === entry) agents.delete(entry.code);
+
+  entry.streamInit = null;
+  for (const viewer of entry.viewers) {
+    try {
+      viewer.send(JSON.stringify({ event: 'stream', data: { state: 'ended', reason: 'the agent disconnected' } }));
+    } catch {
+      /* viewer gone */
+    }
+  }
+  entry.viewers.clear();
   for (const pending of entry.pending.values()) {
     clearTimeout(pending.timer);
     pending.reject(new SteamError('The agent disconnected', { status: 503 }));
@@ -89,6 +115,75 @@ export function resolveReply(socket, message) {
 
   if (message.ok) pending.resolve(message.data ?? null);
   else pending.reject(new SteamError(message.error?.message || 'The agent refused that request', { status: message.error?.status || 502 }));
+}
+
+/* ------------------------------------------------------------------ *
+ * Screen streaming
+ * ------------------------------------------------------------------ */
+
+const KIND_INIT = 1;
+
+/**
+ * A binary frame from an agent: byte 0 says whether this is the fMP4 header
+ * or a media fragment. The header is cached so viewers who arrive mid-stream
+ * get it before any fragment.
+ */
+export function pushStream(socket, data) {
+  const entry = bySocket.get(socket);
+  if (!entry) return;
+  entry.lastSeen = Date.now();
+  if (!data || data.length < 2) return;
+
+  if (data[0] === KIND_INIT) entry.streamInit = Buffer.from(data);
+
+  for (const viewer of entry.viewers) {
+    if (viewer.readyState !== viewer.OPEN) {
+      entry.viewers.delete(viewer);
+      continue;
+    }
+    // Drop fragments for a viewer that cannot keep up rather than buffering
+    // the stream into memory.
+    if (viewer.bufferedAmount > 8 * 1024 * 1024) continue;
+    try {
+      viewer.send(data, { binary: true });
+    } catch {
+      entry.viewers.delete(viewer);
+    }
+  }
+}
+
+/** Attach a browser socket to an agent's stream. */
+export function addViewer(code, viewer) {
+  const entry = find(code);
+  entry.viewers.add(viewer);
+  viewersBySocket.set(viewer, entry);
+
+  if (entry.streamInit && viewer.readyState === viewer.OPEN) {
+    try {
+      viewer.send(entry.streamInit, { binary: true });
+    } catch {
+      /* viewer gone */
+    }
+  }
+
+  return { code: entry.code, viewers: entry.viewers.size, hasHeader: Boolean(entry.streamInit) };
+}
+
+const viewersBySocket = new WeakMap();
+
+export function removeViewer(viewer) {
+  const entry = viewersBySocket.get(viewer);
+  if (!entry) return;
+  entry.viewers.delete(viewer);
+  viewersBySocket.delete(viewer);
+}
+
+export function viewerCount(code) {
+  try {
+    return find(code).viewers.size;
+  } catch {
+    return 0;
+  }
 }
 
 function find(code) {

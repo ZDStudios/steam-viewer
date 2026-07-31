@@ -18,10 +18,35 @@ It prints a **pairing code**. Enter that on the site under **Remote Play**.
 | Reads your installed games | ✅ from `steamapps/appmanifest_*.acf` — no login, no password |
 | Launches a game remotely | ✅ hands `steam://rungameid/<id>` to your Steam client |
 | Rescans when you install something | ✅ every 5 minutes, configurable |
-| Streams video into the browser | ✅ via [moonlight-web-stream](https://github.com/MrCreativ3001/moonlight-web-stream) |
+| Streams the screen into the browser | ✅ built in, needs only ffmpeg |
+| Streams with mouse/controller input | ✅ via [moonlight-web-stream](https://github.com/MrCreativ3001/moonlight-web-stream) + Sunshine |
 | Closes a running game | ❌ Steam has no protocol handler for it |
 
-### Watching in the browser
+### Built-in streaming (no extra software)
+
+If **ffmpeg** is on your PATH, the agent can stream the screen to the site on
+its own — press **Start watching** on the Remote Play page. ffmpeg captures the
+desktop (`gdigrab` on Windows, `avfoundation` on macOS, `x11grab` on Linux),
+encodes it, and the fragments travel down the same connection the agent already
+has, so there is still nothing to port-forward.
+
+The browser says which codec it can decode and the agent encodes to match —
+H.264 in fragmented MP4 normally, VP8 in WebM for browsers built without
+proprietary codecs.
+
+Roughly a second behind real time: right for watching a game, not for aiming.
+There is no input forwarding on this path — it is a view of the screen. Use the
+Moonlight route below to actually play.
+
+```powershell
+npm start -- --relay <url> --stream-fps 30 --stream-bitrate 8M --stream-height 1080
+```
+
+Install ffmpeg from <https://ffmpeg.org/download.html> (on Windows,
+`winget install Gyan.FFmpeg` works) and make sure `ffmpeg` runs in a fresh
+terminal, or pass `--ffmpeg C:\path\to\ffmpeg.exe`.
+
+### Watching in the browser, with input (Moonlight)
 
 Install on the gaming PC:
 
@@ -95,6 +120,12 @@ pin one with `--code` only if you understand that.
 | `--steam-root <path>` | Steam directory, if auto-detection misses it |
 | `--no-launch` | Read-only mode |
 | `--refresh-seconds <n>` | Library rescan interval (default 300, minimum 60) |
+| `--stream=false` | Disable built-in streaming |
+| `--ffmpeg <path>` | ffmpeg binary, if not on PATH |
+| `--stream-fps <n>` | Capture frame rate (default 30) |
+| `--stream-bitrate <r>` | Video bitrate, e.g. `8M` (default 6M) |
+| `--stream-height <n>` | Scale down to this height (default 1080) |
+| `--stream-display <s>` | Capture source override |
 | `--web-stream-port <n>` | Port moonlight-web-stream listens on (default 8080) |
 | `--web-stream-url <url>` | Its address, if it runs elsewhere or behind a proxy |
 | `--ca <path>` | Extra CA certificate to trust (PEM) |

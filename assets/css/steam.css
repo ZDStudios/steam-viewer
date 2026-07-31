@@ -43,6 +43,16 @@
   box-sizing: border-box;
 }
 
+/**
+ * The browser's own `[hidden] { display: none }` sits in the UA sheet, so any
+ * component rule that sets `display` silently beats it and the element stays
+ * on screen with `hidden` set. Everything here toggles visibility with the
+ * `hidden` property, so make it win outright.
+ */
+[hidden] {
+  display: none !important;
+}
+
 html {
   scroll-behavior: smooth;
 }
@@ -2466,4 +2476,18 @@ a.chip:hover {
 }
 .installed .btn {
   width: 100%;
+}
+
+.stream__video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin-top: 12px;
+  border-radius: var(--radius);
+  background: #000;
+  display: block;
+}
+.stream__status {
+  font-size: 12px;
+  color: var(--text-dim);
+  align-self: center;
 }

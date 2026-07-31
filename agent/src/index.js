@@ -23,6 +23,7 @@ import process from 'node:process';
 import { WebSocket } from 'ws';
 
 import { findSteamRoot, listInstalledGames } from './steamfs.js';
+import { CODECS, detectFfmpeg, ScreenStream } from './stream.js';
 
 const VERSION = '1.0.0';
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -56,6 +57,15 @@ const REFRESH_MS = Number(options['refresh-seconds'] || 300) * 1000;
  * to a browser over WebRTC. If it is running on this PC we hand the site its
  * address so the stream can be watched in the page.
  */
+/** Built-in ffmpeg screen streaming. */
+const STREAM_ENABLED = options.stream !== 'false';
+const FFMPEG_PATH = options.ffmpeg || null;
+const STREAM_FPS = Number(options['stream-fps'] || 30);
+const STREAM_BITRATE = options['stream-bitrate'] || '6M';
+const STREAM_HEIGHT = Number(options['stream-height'] || 1080);
+const STREAM_INPUT = options['stream-input'] || null;
+const STREAM_DISPLAY = options['stream-display'] || null;
+
 const WEB_STREAM_PORT = Number(options['web-stream-port'] || 8080);
 const WEB_STREAM_URL = options['web-stream-url'] || process.env.STEAM_VIEWER_WEB_STREAM || null;
 
@@ -116,6 +126,12 @@ Options
   --web-stream-port <n>  Port moonlight-web-stream listens on (default 8080)
   --web-stream-url <url> Its address, if it runs on another machine or behind
                          a reverse proxy (skips auto-detection)
+  --stream=false         Disable built-in screen streaming
+  --ffmpeg <path>        ffmpeg binary, if it is not on PATH
+  --stream-fps <n>       Capture frame rate (default 30)
+  --stream-bitrate <r>   Video bitrate, e.g. 8M (default 6M)
+  --stream-height <n>    Scale down to this height (default 1080)
+  --stream-display <s>   Capture source override (gdigrab/x11grab/avfoundation)
   --ca <path>            Extra CA certificate to trust (PEM). Needed when
                          antivirus or a corporate proxy inspects HTTPS.
   --insecure             Skip certificate verification entirely. Last resort.
@@ -222,19 +238,32 @@ async function streamingStatus() {
   return {
     // Streaming is possible if either path is there; the browser one is what
     // actually plays inside the page.
-    available: sunshine || webStream.available,
-    mode: webStream.available ? 'web' : sunshine ? 'moonlight' : null,
+    available: sunshine || webStream.available || Boolean(ffmpeg),
+    mode: ffmpeg ? 'built-in' : webStream.available ? 'web' : sunshine ? 'moonlight' : null,
     host,
     sunshine,
     webStream,
+    builtIn: {
+      available: Boolean(ffmpeg),
+      running: Boolean(screen?.running),
+      ffmpeg: ffmpeg?.version || null,
+      codecs: Object.keys(CODECS),
+      reason: ffmpeg
+        ? null
+        : STREAM_ENABLED
+          ? 'ffmpeg was not found on this PC'
+          : 'disabled with --stream=false',
+    },
     // Moonlight registers this scheme when the native client is installed.
     moonlightUrl: sunshine && host ? `moonlight://${host}` : null,
     sunshineWebUi: webui && host ? `https://${host}:47990` : null,
-    note: webStream.available
-      ? 'moonlight-web-stream detected — the stream can play in the browser.'
-      : sunshine
-        ? 'Sunshine detected. Install moonlight-web-stream to watch in the browser, or use the native Moonlight client.'
-        : 'No Sunshine host detected on this PC. Launching games remotely works either way.',
+    note: ffmpeg
+      ? 'Built-in streaming is ready — press Watch to see this PC in the browser.'
+      : webStream.available
+        ? 'moonlight-web-stream detected — the stream can play in the browser.'
+        : sunshine
+          ? 'Sunshine detected. Use the native Moonlight client, or install ffmpeg for built-in streaming.'
+          : 'Install ffmpeg for built-in streaming. Launching games remotely works either way.',
     downloads: {
       sunshine: 'https://app.lizardbyte.dev/Sunshine/',
       moonlight: 'https://moonlight-stream.org/',
@@ -287,6 +316,74 @@ const asPayload = () =>
     lastPlayed: game.lastPlayed,
     fullyInstalled: game.fullyInstalled,
   }));
+
+/* ------------------------------------------------------------------ *
+ * Screen streaming
+ * ------------------------------------------------------------------ */
+
+const ffmpeg = STREAM_ENABLED ? detectFfmpeg(FFMPEG_PATH) : null;
+let screen = null;
+
+/**
+ * Frames are sent as binary with a one-byte kind marker, so the relay can
+ * cache the header and replay it to anyone who joins mid-stream.
+ *   0x01 = fMP4 init segment   0x02 = media fragment
+ */
+const KIND_INIT = 1;
+const KIND_MEDIA = 2;
+
+function sendFrame(kind, chunk) {
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  const framed = Buffer.allocUnsafe(chunk.length + 1);
+  framed[0] = kind;
+  chunk.copy(framed, 1);
+  try {
+    socket.send(framed, { binary: true });
+  } catch {
+    /* the socket is going away; the close handler cleans up */
+  }
+}
+
+function startScreenStream(params = {}) {
+  if (!ffmpeg) {
+    throw new Error(
+      'ffmpeg was not found on this PC. Install it and make sure `ffmpeg` runs from a terminal, or pass --ffmpeg <path>.',
+    );
+  }
+  if (screen?.running) return { ok: true, alreadyRunning: true, ffmpeg: ffmpeg.version };
+
+  const codec = CODECS[params.codec] ? params.codec : 'h264';
+
+  screen = new ScreenStream({
+    ffmpegPath: ffmpeg.path,
+    codec,
+    fps: params.fps || STREAM_FPS,
+    bitrate: params.bitrate || STREAM_BITRATE,
+    height: params.height || STREAM_HEIGHT,
+    display: STREAM_DISPLAY,
+    input: STREAM_INPUT,
+    onChunk: (chunk, isInit) => sendFrame(isInit ? KIND_INIT : KIND_MEDIA, chunk),
+    onExit: (error) => {
+      if (error) console.error(`[agent] stream stopped: ${error.message}`);
+      screen = null;
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'stream-state', running: false, error: error ? error.message : null }));
+      }
+    },
+  });
+
+  screen.start();
+  console.log(`[agent] screen stream started (${codec})`);
+  return { ok: true, ffmpeg: ffmpeg.version, fps: params.fps || STREAM_FPS, codec, mime: screen.mime };
+}
+
+function stopScreenStream() {
+  if (!screen) return { ok: true, alreadyStopped: true };
+  screen.stop();
+  screen = null;
+  console.log('[agent] screen stream stopped');
+  return { ok: true };
+}
 
 /* ------------------------------------------------------------------ *
  * Relay connection
@@ -342,6 +439,24 @@ async function handleOperation(message) {
           message: 'Steam provides no way to close a running game remotely — quit it on the PC.',
           status: 501,
         });
+        return;
+      }
+
+      case 'stream.start': {
+        if (!ALLOW_LAUNCH) {
+          reply(false, { message: 'This agent runs in read-only mode (--no-launch).', status: 403 });
+          return;
+        }
+        try {
+          reply(true, startScreenStream(params));
+        } catch (error) {
+          reply(false, { message: error.message, status: 501 });
+        }
+        return;
+      }
+
+      case 'stream.stop': {
+        reply(true, stopScreenStream());
         return;
       }
 
@@ -451,11 +566,13 @@ async function connect() {
       console.log(`  ✔ ${installed.length} installed games visible`);
       console.log(
     `  ✔ Streaming: ${
-      streaming.webStream?.available
-        ? `in-browser via moonlight-web-stream (${streaming.webStream.url || streaming.webStream.localUrl})`
-        : streaming.sunshine
-          ? 'Sunshine detected (native Moonlight only)'
-          : 'not available'
+      streaming.builtIn?.available
+        ? 'built in (ffmpeg) — watch straight from the site'
+        : streaming.webStream?.available
+          ? `moonlight-web-stream (${streaming.webStream.url || streaming.webStream.localUrl})`
+          : streaming.sunshine
+            ? 'Sunshine detected (native Moonlight only)'
+            : `not available — ${streaming.builtIn?.reason || 'no capture backend'}`
     }\n`,
   );
       console.log(`     Pairing code:  ${CODE}\n`);
@@ -520,6 +637,7 @@ refreshTimer = setInterval(async () => {
 
 const shutdown = () => {
   clearInterval(refreshTimer);
+  stopScreenStream();
   try {
     socket?.close(1000, 'agent shutting down');
   } catch {

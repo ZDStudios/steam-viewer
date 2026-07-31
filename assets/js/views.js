@@ -20,14 +20,30 @@ import {
 } from './components.js';
 import { renderRichText } from './sanitize.js';
 import * as wishlist from './wishlist.js';
+import { pickCodec, ScreenPlayer } from './screen.js';
 import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime, movieSources } from './util.js';
 
 /** Card options every grid shares: hide ignored titles, mark wishlisted ones. */
 const cardOpts = (extra = {}) => ({ isWishlisted: (appid) => wishlist.has(appid), ...extra });
 const visible = (items = []) => wishlist.filterIgnored(dedupe(items));
 
-/** Wire up every ☆ / Ignore control inside `root`. */
+/**
+ * The ☆ / Ignore controls are handled by one delegated listener per root.
+ *
+ * Views render into an element the router reuses, so attaching a fresh
+ * listener on every render stacked them up: one click then ran every handler
+ * a previous view had left behind, toggling the wishlist once per listener
+ * (add, remove, add…) and reporting whichever stale name that view had
+ * captured. Only the current view's lookup is kept.
+ */
+const itemLookups = new WeakMap();
+const boundRoots = new WeakSet();
+
 function bindItemActions(root, lookup) {
+  itemLookups.set(root, lookup);
+  if (boundRoots.has(root)) return;
+  boundRoots.add(root);
+
   root.addEventListener('click', (event) => {
     const wishButton = event.target.closest('[data-wish]');
     const ignoreButton = event.target.closest('[data-ignore]');
@@ -37,16 +53,17 @@ function bindItemActions(root, lookup) {
     event.preventDefault();
     event.stopPropagation();
 
-    const appid = Number((wishButton || ignoreButton).dataset.wish || (wishButton || ignoreButton).dataset.ignore);
-    const game = lookup?.(appid) || { appid, name: `App ${appid}` };
+    const button = wishButton || ignoreButton;
+    const appid = Number(button.dataset.wish || button.dataset.ignore);
+    const game = itemLookups.get(root)?.(appid) || { appid, name: `App ${appid}` };
 
     if (wishButton) {
       const added = wishlist.toggle(game);
       toast(added ? `${game.name} added to your wishlist` : `${game.name} removed from your wishlist`, 'ok', 2600);
-      for (const button of $$(`[data-wish="${appid}"]`, root)) {
-        button.classList.toggle('is-on', added);
-        button.textContent = button.classList.contains('btn') ? (added ? '★ On wishlist' : '☆ Add to wishlist') : added ? '★' : '☆';
-        button.title = added ? 'Remove from wishlist' : 'Add to wishlist';
+      for (const node of $$(`[data-wish="${appid}"]`, root)) {
+        node.classList.toggle('is-on', added);
+        node.textContent = node.classList.contains('btn') ? (added ? '★ On wishlist' : '☆ Add to wishlist') : added ? '★' : '☆';
+        node.title = added ? 'Remove from wishlist' : 'Add to wishlist';
       }
       return;
     }
@@ -1236,6 +1253,9 @@ export async function playView(root, ctx) {
   ctx.setTitle('Remote Play · Steam Viewer');
   const saved = localStorage.getItem(AGENT_KEY) || '';
 
+  // Navigating away must stop the encoder on the PC, not leave it running.
+  const streamCleanups = [];
+
   root.innerHTML = `
     <div class="breadcrumbs"><a href="#/">Store</a> &rsaquo; Remote Play</div>
     <h1 class="apphead__title" style="margin-bottom:6px">Remote Play</h1>
@@ -1275,6 +1295,8 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
   const body = $('#agent-body', root);
 
   const connect = async (code) => {
+    // Reconnecting rebuilds the panel; retire the previous one's teardown.
+    while (streamCleanups.length) streamCleanups.pop()();
     body.innerHTML = '<p class="loading-note">Contacting your PC…</p>';
     try {
       const data = await ctx.relay.request('agent', { code, op: 'games' });
@@ -1304,6 +1326,7 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
         </div>
       </div>
 
+      <div id="builtin-slot"></div>
       <div id="stream-slot"></div>
 
       <div class="toolbar">
@@ -1313,10 +1336,130 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
 
       <div class="grid grid--portrait" id="agent-grid"></div>`;
 
+    /* — built-in streaming (agent + ffmpeg) — */
+    const builtIn = streaming.builtIn || {};
+    let player = null;
+
+    const paintBuiltIn = () => {
+      const slot = $('#builtin-slot', body);
+      if (!slot) return;
+
+      slot.innerHTML = `
+        <section class="panel stream" style="margin-bottom:16px">
+          <div class="panel__head">
+            <h2>Watch this PC</h2>
+            <span>${builtIn.available ? 'built in' : 'unavailable'}</span>
+          </div>
+          <div class="panel__body">
+            ${
+              builtIn.available
+                ? `<div class="stream__actions">
+                     <button class="btn btn--green btn--sm" type="button" id="builtin-start">▶ Start watching</button>
+                     <button class="btn btn--ghost btn--sm" type="button" id="builtin-stop" hidden>Stop</button>
+                     <span class="stream__status" id="builtin-status"></span>
+                   </div>
+                   <video id="builtin-video" class="stream__video" playsinline muted hidden></video>
+                   <p class="loading-note" style="text-align:left">
+                     Encoded on your PC with ffmpeg and delivered through the relay. Around a second behind real time —
+                     good for watching, not for aiming. For low-latency play with controller and mouse input, use the
+                     moonlight-web-stream panel below.
+                   </p>`
+                : `<p class="loading-note" style="text-align:left">
+                     ${esc(builtIn.reason || 'Built-in streaming is not available on that PC.')}
+                     Install <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener noreferrer">ffmpeg</a>,
+                     make sure <code>ffmpeg</code> runs from a terminal, and restart the agent.
+                   </p>`
+            }
+          </div>
+        </section>`;
+
+      if (!builtIn.available) return;
+
+      const video = $('#builtin-video', slot);
+      const startButton = $('#builtin-start', slot);
+      const stopButton = $('#builtin-stop', slot);
+      const status = $('#builtin-status', slot);
+      const say = (text) => {
+        status.textContent = text;
+      };
+
+      let offChunk = null;
+
+      const stopWatching = async () => {
+        offChunk?.();
+        offChunk = null;
+        player?.stop();
+        player = null;
+        video.hidden = true;
+        startButton.hidden = false;
+        stopButton.hidden = true;
+        say('');
+        try {
+          await ctx.relay.request('agent', { code, op: 'stream.stop' });
+          ctx.relay.request('stream.leave', {}).catch(() => {});
+        } catch {
+          /* the agent may already have stopped */
+        }
+      };
+
+      startButton.addEventListener('click', async () => {
+        // Ask the PC for something this browser can actually decode.
+        const choice = pickCodec();
+        if (!choice) {
+          say('This browser cannot play the stream — no supported video codec.');
+          return;
+        }
+        startButton.disabled = true;
+        say('starting the encoder…');
+
+        try {
+          // Watch first so the header is not missed, then start the encoder.
+          await ctx.relay.request('stream.watch', { code });
+          await ctx.relay.request('agent', { code, op: 'stream.start', codec: choice.codec }, { timeoutMs: 40_000 });
+        } catch (error) {
+          say('');
+          toast(error.message, 'error', 8000);
+          startButton.disabled = false;
+          return;
+        }
+
+        video.hidden = false;
+        startButton.hidden = true;
+        startButton.disabled = false;
+        stopButton.hidden = false;
+
+        player = new ScreenPlayer(
+          video,
+          ({ state, detail }) => {
+            if (state === 'playing') say('live');
+            else if (state === 'waiting') say('waiting for the first frame…');
+            else if (state === 'error') {
+              say('');
+              toast(detail || 'The stream failed.', 'error', 8000);
+            } else if (detail) say(detail);
+          },
+          choice.mime,
+        );
+        player.start();
+        offChunk = ctx.relay.on('stream-chunk', (buffer) => player?.push(buffer));
+      });
+
+      stopButton.addEventListener('click', stopWatching);
+
+      // Leaving the page must not leave ffmpeg running on the PC.
+      streamCleanups.push(() => {
+        offChunk?.();
+        player?.stop();
+        ctx.relay.request('agent', { code, op: 'stream.stop' }).catch(() => {});
+        ctx.relay.request('stream.leave', {}).catch(() => {});
+      });
+    };
+
     /* — in-browser streaming via moonlight-web-stream — */
     const streamSlot = $('#stream-slot', body);
     const savedStream = localStorage.getItem(STREAM_KEY) || '';
     const webStream = streaming.webStream || {};
+    const canStream = Boolean(streaming.builtIn?.available || savedStream || webStream.url || webStream.localUrl);
     // A manual override wins: the agent can only see its own machine.
     const streamUrl = savedStream || webStream.url || webStream.localUrl || '';
     const streamSecure = streamUrl.startsWith('https://');
@@ -1414,29 +1557,61 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
       });
     };
 
+    paintBuiltIn();
     paintStream();
 
     const grid = $('#agent-grid', body);
     const filter = $('#agent-filter', body);
+
+    /**
+     * The agent only knows an appid and the name in Steam's manifest, so the
+     * store art is fetched from the relay and merged in — the same cards the
+     * rest of the site uses, rather than guessed URLs that 404.
+     */
+    const art = new Map();
 
     const paint = () => {
       const term = filter.value.trim().toLowerCase();
       const shown = games.filter((game) => !term || game.name.toLowerCase().includes(term));
       grid.innerHTML =
         shown
-          .map(
-            (game) => `<div class="installed">
-                ${portraitCardHtml({ appid: game.appid, name: game.name }, { subtitle: game.fullyInstalled ? 'installed' : 'downloading' })}
+          .map((game) => {
+            const store = art.get(game.appid);
+            const card = {
+              appid: game.appid,
+              name: store?.name || game.name,
+              portrait: store?.portrait,
+              capsule: store?.capsule,
+              header: store?.header,
+            };
+            return `<div class="installed">
+                ${portraitCardHtml(card, { subtitle: game.fullyInstalled ? 'installed' : 'downloading' })}
                 <button class="btn btn--green btn--sm" type="button" data-launch="${game.appid}">▶ Play on PC</button>
-                ${streamUrl ? `<button class="btn btn--ghost btn--sm" type="button" data-stream="${game.appid}">▶ Play &amp; stream</button>` : ''}
-              </div>`,
-          )
+                ${canStream ? `<button class="btn btn--ghost btn--sm" type="button" data-stream="${game.appid}">▶ Play &amp; stream</button>` : ''}
+              </div>`;
+          })
           .join('') || '<p class="loading-note">No installed games match that filter.</p>';
       attachImageFallbacks(grid);
     };
 
+    /** Pull store art in batches; repaint as each batch lands. */
+    const loadArt = async () => {
+      const ids = games.map((game) => game.appid);
+      for (let index = 0; index < ids.length; index += 25) {
+        const batch = ids.slice(index, index + 25);
+        try {
+          const items = await ctx.relay.request('apps', { appids: batch, cc: ctx.region, l: ctx.language }, { timeoutMs: 60_000 });
+          for (const item of items) art.set(item.appid, item);
+          paint();
+        } catch {
+          // A batch that fails just keeps the constructed-URL fallbacks.
+        }
+      }
+    };
+
     filter.addEventListener('input', paint);
     paint();
+    loadArt();
 
     grid.addEventListener('click', async (event) => {
       const streamButton = event.target.closest('[data-stream]');
@@ -1502,6 +1677,17 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
   });
 
   if (saved) await connect(saved);
+
+  // The router calls this before the next navigation.
+  return () => {
+    for (const stop of streamCleanups) {
+      try {
+        stop();
+      } catch {
+        /* best effort */
+      }
+    }
+  };
 }
 
 /* ================================================================== *

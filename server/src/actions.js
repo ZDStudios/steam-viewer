@@ -423,6 +423,15 @@ export const ACTIONS = {
           return agents.request(code, 'stop', { appid: p.appid ? appid(p.appid) : null });
         case 'stream':
           return agents.request(code, 'stream', { appid: p.appid ? appid(p.appid) : null });
+        case 'stream.start':
+          return agents.request(code, 'stream.start', {
+            fps: Number(p.fps) || undefined,
+            bitrate: str(p.bitrate) || undefined,
+            height: Number(p.height) || undefined,
+            codec: str(p.codec) || undefined,
+          });
+        case 'stream.stop':
+          return agents.request(code, 'stream.stop', {});
         default:
           throw new SteamError(`Unknown agent operation “${op}”`, { status: 400 });
       }
