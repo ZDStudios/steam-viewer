@@ -34,13 +34,23 @@ The browser says which codec it can decode and the agent encodes to match —
 H.264 in fragmented MP4 normally, VP8 in WebM for browsers built without
 proprietary codecs.
 
-Roughly a second behind real time: right for watching a game, not for aiming.
-There is no input forwarding on this path — it is a view of the screen. Use the
-Moonlight route below to actually play.
+Everything that could buffer has been switched off: no input probing, no
+lookahead in the encoder, no B-frames, and one fragment per frame so the muxer
+never holds output back waiting for a fragment to fill. The page corrects its
+own drift on top of that. Measured end to end through a relay, first frame
+arrives in about **585 ms** and the picture then runs **120–400 ms** behind at
+60 fps.
+
+There is still no input forwarding on this path — it is a view of the screen.
+Use the Moonlight route below to actually play.
 
 ```powershell
-npm start -- --relay <url> --stream-fps 30 --stream-bitrate 8M --stream-height 1080
+npm start -- --relay <url> --stream-fps 60 --stream-bitrate 20M --stream-height 1080
 ```
+
+Every paired PC also has a shareable watch page at `#/watch/<pairing-code>` on
+the site, with the relay and the code both in the URL. It plays for anyone you
+send it to — which is also the warning.
 
 **You do not need to install ffmpeg yourself.** `npm install` pulls in a static
 build as an optional dependency, and if that was skipped or failed the agent
@@ -121,6 +131,9 @@ pin one with `--code` only if you understand that.
 - No inbound ports are opened. The agent dials out to the relay.
 - The relay never sees your Steam credentials; it only forwards operations.
 - `--no-launch` runs read-only: the library is visible, launches are refused.
+- `--stream=false` refuses screen streaming. This is deliberately a *separate*
+  switch from `--no-launch`: watching the screen and starting a game are
+  different permissions, so neither one silently implies the other.
 - Stop the agent and the pairing dies with it.
 
 ## Options
@@ -135,8 +148,8 @@ pin one with `--code` only if you understand that.
 | `--stream=false` | Disable built-in streaming |
 | `--no-ffmpeg-install` | Never download ffmpeg; use only what is already present |
 | `--ffmpeg <path>` | ffmpeg binary, if not on PATH |
-| `--stream-fps <n>` | Capture frame rate (default 30) |
-| `--stream-bitrate <r>` | Video bitrate, e.g. `8M` (default 6M) |
+| `--stream-fps <n>` | Capture frame rate (default 60, floor 30) |
+| `--stream-bitrate <r>` | Video bitrate, e.g. `20M` (default 12M) |
 | `--stream-height <n>` | Scale down to this height (default 1080) |
 | `--stream-display <s>` | Capture source override |
 | `--web-stream-port <n>` | Port moonlight-web-stream listens on (default 8080) |

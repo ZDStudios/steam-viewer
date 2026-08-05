@@ -27,3 +27,11 @@ services:
       # Get one at https://steamcommunity.com/dev/apikey
       - key: STEAM_API_KEY
         sync: false
+
+      # Where "Sign in through Steam" is allowed to send people back to, as a
+      # comma-separated list of origins, e.g. "https://<your-user>.github.io".
+      # Leave unset and GitHub Pages plus localhost are accepted; set it to
+      # lock the relay down to exactly your own site. Setting it replaces the
+      # defaults rather than adding to them.
+      - key: SITE_ORIGINS
+        sync: false

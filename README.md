@@ -50,6 +50,7 @@ Optional environment variables:
 | --- | --- |
 | `STEAM_API_KEY` | **Optional.** Profiles already work without it via community XML; a key adds Steam level, account age and a clearer private-profile signal. Get one at <https://steamcommunity.com/dev/apikey>. |
 | `ALLOWED_ORIGINS` | Comma-separated allow-list, e.g. `https://<your-user>.github.io`. Unset means any origin. |
+| `SITE_ORIGINS` | Where **Sign in through Steam** may send people back to. Unset accepts GitHub Pages and localhost; setting it replaces those defaults, so use it to lock sign-in to your own site only. |
 
 When it is live, open the service URL — you should get a status page listing the WebSocket endpoint.
 
@@ -170,17 +171,36 @@ needs port-forwarding. It never sees your Steam password.
 
 ### Watching in the browser (built in)
 
-The agent streams the screen to the site by itself. ffmpeg comes with it — a
-static build is an optional npm dependency, and if that did not land the agent
-downloads one into `agent/.ffmpeg` on first run, so there is nothing to install
-system-wide. It — no Sunshine, no second server. It captures the desktop,
-encodes to whichever codec the browser reports it can decode (H.264 in
-fragmented MP4, or VP8 in WebM for browsers without proprietary codecs), and
-pushes fragments down the connection the agent already holds. The page feeds
-them into a MediaSource, so there is no plugin and nothing to port-forward.
+The agent streams the screen to the site by itself — no Sunshine, no second
+server. ffmpeg comes with it: a static build is an optional npm dependency, and
+if that did not land the agent downloads one into `agent/.ffmpeg` on first run,
+so there is nothing to install system-wide. It captures the desktop, encodes to
+whichever codec the browser reports it can decode (H.264 in fragmented MP4, or
+VP8 in WebM for browsers without proprietary codecs), and pushes fragments down
+the connection the agent already holds. The page feeds them into a MediaSource,
+so there is no plugin and nothing to port-forward.
 
-About a second of latency, and no input forwarding: it is a view of the screen,
-which suits watching a game rather than playing one.
+Latency is what the pipeline can be made to give up, not what is comfortable to
+write: input probing is off, x264 keeps no frames in flight, and the muxer emits
+a fragment per frame rather than holding one back. On the browser side a
+`<video>` fed by MediaSource has no notion of "live" — every stall pushes it
+permanently further into the past — so the player measures how far behind the
+newest decoded frame it is, absorbs small drift by playing 6% fast and seeks
+when the gap is real. It shows you that measured figure rather than a promise.
+Measured end to end through a relay: first frame in **585 ms**, then
+**120–400 ms** behind live at 60 fps. Defaults are 60 fps / 12 Mbit with 30 fps
+as the floor (`--stream-fps`, `--stream-bitrate`, `--stream-height`).
+
+There is still no input forwarding: it is a view of the screen, which suits
+watching a game rather than playing one. For input, use Moonlight below.
+
+**Sharing a stream.** Every paired PC has a watch page at
+`#/watch/<pairing-code>`, and the panel's *Open in a new tab* / *Copy share
+link* buttons hand you a link with the relay and the code both in the URL. It
+plays in any browser on any machine with nothing set up first — which also
+means anyone holding it can watch, so treat it like a password. `--stream=false`
+turns streaming off entirely; that is a separate switch from `--no-launch`,
+which only stops games being started.
 
 ### Playing in the browser (Moonlight)
 
@@ -209,6 +229,21 @@ level, a richer friends list and exact two-week playtime instead.
 
 A profile whose game details are private cannot be read either way — that is Steam's setting, not a limitation here.
 
+### Connecting your own account
+
+**Sign in through Steam** on the Profiles tab uses Valve's own OpenID provider. You are sent to
+`steamcommunity.com`, you type your password there and nowhere else, and Steam sends you back with a signed
+assertion that the relay re-verifies with Steam directly before believing it. All the site learns is your
+SteamID64 — the same public number already in your profile URL — so there is no password to store and disconnecting
+is literally forgetting a number.
+
+That is enough to open straight to your profile, level, library, playtime, achievements, friends and account value.
+It is **not** a Steam session, so your **cart** and **wallet balance** stay out of reach: both live behind an
+authenticated Steam store session and Valve publishes no API for either, to anyone, with or without a key. The only
+way any site could show them is by capturing a real Steam login, which this project will not build and which you
+should not hand to a third-party page. The account panel links straight to both on Steam instead. Signing in also
+does not override your privacy settings — a private library stays private here too.
+
 ## Trailers and animated clips
 
 Two things had to be right for game media to play:
@@ -227,9 +262,18 @@ grab focus.
 ## Slow or blocked Steam CDNs
 
 Steam's asset hosts are fast from some networks and unusable from others. Any
-image that has not produced pixels within **3 seconds** is re-requested through
-the relay's `GET /media?url=…` endpoint, which streams the asset back with a
-day of cache headers. Trailers append the same route as their final source.
+Steam image that has not produced pixels within **3 seconds** is re-requested
+through the relay's `GET /media?url=…` endpoint, which streams the asset back
+with a day of cache headers. Trailers append the same route as their final
+source.
+
+The clock starts when the browser actually begins fetching, not when the card
+renders — cards are lazy-loaded, so timing from render would route the whole
+page through the relay three seconds later for no reason. And after four
+rescues the page stops giving the CDN the benefit of the doubt and routes new
+images through the relay up front: on a network where Steam is simply
+unreachable that is the difference between a page that trickles in over a
+minute and one that loads at once.
 
 It is not an open proxy: only Steam's own asset hosts pass the allow-list, only
 image/video/audio responses are returned, `Range` is forwarded so video seeking
