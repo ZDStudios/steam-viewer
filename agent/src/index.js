@@ -60,8 +60,8 @@ const REFRESH_MS = Number(options['refresh-seconds'] || 300) * 1000;
 /** Built-in ffmpeg screen streaming. */
 const STREAM_ENABLED = options.stream !== 'false';
 const FFMPEG_PATH = options.ffmpeg || null;
-const STREAM_FPS = Number(options['stream-fps'] || 30);
-const STREAM_BITRATE = options['stream-bitrate'] || '6M';
+const STREAM_FPS = Number(options['stream-fps'] || 60);
+const STREAM_BITRATE = options['stream-bitrate'] || '12M';
 const STREAM_HEIGHT = Number(options['stream-height'] || 1080);
 const STREAM_INPUT = options['stream-input'] || null;
 const ALLOW_FFMPEG_INSTALL = options['no-ffmpeg-install'] !== 'true';
@@ -129,8 +129,8 @@ Options
                          a reverse proxy (skips auto-detection)
   --stream=false         Disable built-in screen streaming
   --ffmpeg <path>        ffmpeg binary, if it is not on PATH
-  --stream-fps <n>       Capture frame rate (default 30)
-  --stream-bitrate <r>   Video bitrate, e.g. 8M (default 6M)
+  --stream-fps <n>       Capture frame rate (default 60, minimum 30)
+  --stream-bitrate <r>   Video bitrate, e.g. 20M (default 12M)
   --stream-height <n>    Scale down to this height (default 1080)
   --stream-display <s>   Capture source override (gdigrab/x11grab/avfoundation)
   --no-ffmpeg-install    Never download ffmpeg; use only what is already here

@@ -302,12 +302,13 @@ export class ScreenStream {
    * @param {(chunk: Buffer, isInit: boolean) => void} options.onChunk
    * @param {(error: Error|null) => void} options.onExit
    */
-  constructor({ ffmpegPath, fps = 30, bitrate = '6M', height = 1080, display = null, input = null, codec = 'h264', onChunk, onExit }) {
+  constructor({ ffmpegPath, fps = 60, bitrate = '12M', height = 1080, display = null, input = null, codec = 'h264', onChunk, onExit }) {
     this.ffmpegPath = ffmpegPath;
     this.codec = CODECS[codec] ? codec : 'h264';
     this.container = CODECS[this.codec].container;
     this.mime = CODECS[this.codec].mime;
-    this.fps = Math.min(Math.max(Number(fps) || 30, 5), 60);
+    // 30 fps is the floor: below that the stream stops feeling like a game.
+    this.fps = Math.min(Math.max(Number(fps) || 60, 30), 120);
     this.bitrate = String(bitrate || '6M');
     this.height = Math.min(Math.max(Number(height) || 1080, 240), 2160);
     this.display = display;
@@ -338,7 +339,23 @@ export class ScreenStream {
       '-hide_banner',
       '-loglevel',
       'error',
+      // Latency starts at the input. By default ffmpeg spends up to five
+      // seconds probing a source before it emits anything, and buffers frames
+      // on the way in; on a screen grab there is nothing to learn from probing
+      // and nothing to gain from buffering.
+      '-fflags',
+      'nobuffer',
+      '-flags',
+      'low_delay',
+      '-probesize',
+      '32',
+      '-analyzeduration',
+      '0',
       ...source,
+      // Push every packet down the pipe the moment it exists instead of
+      // letting the muxer accumulate a comfortable write.
+      '-flush_packets',
+      '1',
       '-an',
       '-vf',
       `scale=-2:min(${this.height}\\,ih)`,
@@ -346,11 +363,15 @@ export class ScreenStream {
       this.bitrate,
       '-maxrate',
       this.bitrate,
+      // A one-frame VBV buffer stops the encoder holding frames back to smooth
+      // its bitrate — smoothing is exactly the delay we are trying to remove.
       '-bufsize',
       this.bitrate,
-      // A keyframe every second so a viewer joining late starts quickly.
+      // A keyframe every two seconds. Longer than the old one-second interval
+      // because keyframes are large and a bitrate spike is itself latency;
+      // late joiners still start within two seconds.
       '-g',
-      String(this.fps),
+      String(this.fps * 2),
     ];
 
     if (this.container === 'webm') {
@@ -360,8 +381,15 @@ export class ScreenStream {
         'libvpx',
         '-deadline',
         'realtime',
+        // 8 is the fastest setting; anything lower spends CPU on quality we
+        // trade away for time.
         '-cpu-used',
         '8',
+        // Without this libvpx keeps frames in flight to look ahead.
+        '-lag-in-frames',
+        '0',
+        '-error-resilient',
+        '1',
         '-pix_fmt',
         'yuv420p',
         '-f',
@@ -370,8 +398,12 @@ export class ScreenStream {
         // it cannot do on a pipe.
         '-live',
         '1',
+        // One cluster per frame-ish, so the browser gets data continuously
+        // instead of in quarter-second lumps.
         '-cluster_time_limit',
-        '250',
+        '40',
+        '-cluster_size_limit',
+        '256000',
         'pipe:1',
       ];
     }
@@ -380,28 +412,40 @@ export class ScreenStream {
       ...common,
       '-c:v',
       'libx264',
+      // ultrafast + zerolatency is the combination that actually removes the
+      // encoder's own delay: no B-frames, no lookahead, no frame reordering.
       '-preset',
-      'veryfast',
+      'ultrafast',
       '-tune',
       'zerolatency',
+      // Baseline-ish settings decode faster in the browser than High does, and
+      // the picture is a desktop, not a film.
       '-profile:v',
-      'high',
+      'main',
       '-pix_fmt',
       'yuv420p',
-      '-keyint_min',
-      String(this.fps),
+      // No B-frames and a single reference: nothing is held back waiting for a
+      // future frame, which is where most of an encoder's latency lives.
+      // (`-tune zerolatency` already implies these; they are spelled out so a
+      // future tune change cannot quietly reintroduce the delay.)
+      '-bf',
+      '0',
+      '-refs',
+      '1',
       '-sc_threshold',
       '0',
+      '-keyint_min',
+      String(this.fps),
       '-f',
       'mp4',
-      // empty_moov + frag_keyframe is what makes the output streamable;
-      // frag_duration keeps fragments short so latency stays low.
-      // (The flag is `default_base_moof` — `default_base_is_moof` is the name
-      // of the tfhd bit it sets, and ffmpeg rejects that spelling.)
+      // empty_moov + frag_keyframe is what makes the output streamable.
+      // `frag_every_frame` is the low-latency part: without it the muxer waits
+      // for a whole fragment to complete before writing anything, so the floor
+      // on latency is the fragment length no matter how fast the encoder is.
       '-movflags',
-      '+frag_keyframe+empty_moov+default_base_moof+omit_tfhd_offset',
+      '+frag_keyframe+frag_every_frame+empty_moov+default_base_moof+omit_tfhd_offset',
       '-frag_duration',
-      '200000',
+      '16000',
       'pipe:1',
     ];
   }

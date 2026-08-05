@@ -1249,6 +1249,195 @@ export async function usersView(root, ctx, query) {
 const AGENT_KEY = 'steam-viewer:agent-code';
 const STREAM_KEY = 'steam-viewer:web-stream-url';
 
+/**
+ * A Remote Play card.
+ *
+ * These used to reuse the store's portrait card, which asks for
+ * `library_600x900.jpg`. A large share of installed apps have no portrait art
+ * at all — tools, older titles, anything published before Valve introduced the
+ * library capsule — so the card rendered empty for exactly the games people
+ * have installed. `header.jpg` is the one asset every app on Steam has, so
+ * these are built landscape around it, with the appid-derived URLs listed as
+ * fallbacks so a card still fills in when the relay never answers.
+ */
+function installedCard(game, store) {
+  const appid = game.appid;
+  const name = store?.name || game.name;
+  const primary =
+    store?.header || store?.capsule || `https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/${appid}/header.jpg`;
+  const chain = [
+    `https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/${appid}/header.jpg`,
+    `https://cdn.cloudflare.steamstatic.com/steam/apps/${appid}/header.jpg`,
+    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appid}/header.jpg`,
+    `https://cdn.akamai.steamstatic.com/steam/apps/${appid}/header.jpg`,
+    store?.capsule,
+    store?.portrait,
+  ].filter((url, index, all) => url && url !== primary && all.indexOf(url) === index);
+
+  return `<a class="installed__art" href="#/app/${appid}" title="${escAttr(name)}">
+      <span class="installed__fallback">${esc(name)}</span>
+      <img src="${escAttr(primary)}" data-fallback="${escAttr(chain.join('|'))}"
+           alt="${escAttr(name)}" loading="lazy" decoding="async" />
+    </a>
+    <div class="installed__name" title="${escAttr(name)}">${esc(name)}</div>
+    <div class="installed__state">${game.fullyInstalled ? 'installed' : 'downloading'}${
+      game.sizeOnDisk ? ` · ${formatBytes(game.sizeOnDisk)}` : ''
+    }</div>`;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let index = 0;
+  let size = value;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  return `${size >= 100 || index === 0 ? Math.round(size) : size.toFixed(1)} ${units[index]}`;
+}
+
+/**
+ * A link that opens the stream on its own, with everything needed to play it
+ * in the URL: which relay to talk to and which PC to watch. Anyone who has the
+ * link can watch — the pairing code *is* the credential, which is why the
+ * agent rotates it on every restart.
+ */
+export function watchLink(relayBase, code) {
+  const url = new URL(window.location.href);
+  url.hash = `#/watch/${encodeURIComponent(String(code || '').toUpperCase())}`;
+  url.search = relayBase ? `?server=${encodeURIComponent(relayBase)}` : '';
+  return url.toString();
+}
+
+/**
+ * Wire a <video> to an agent's screen stream and keep it fed.
+ *
+ * Shared by the panel on the Remote Play page and the standalone watch page so
+ * both behave identically — including stopping the encoder on the way out.
+ *
+ * @returns {{stop: () => void}}
+ */
+async function attachStream({ ctx, code, video, say, onEnded }) {
+  const choice = pickCodec();
+  if (!choice) throw new Error('This browser cannot play the stream — no supported video codec.');
+
+  // Fragments only ever arrive as binary WebSocket frames. Issuing
+  // `stream.watch` over the HTTP fallback registers a connection that can
+  // never receive them, which is how a freshly-opened share link ended up
+  // watching a stream that never started.
+  const online = await ctx.relay.whenOnline();
+  if (!online) throw new Error('The relay is not reachable over WebSocket, so the stream cannot be delivered.');
+
+  say?.('starting the encoder…');
+  await ctx.relay.request('stream.watch', { code });
+  await ctx.relay.request('agent', { code, op: 'stream.start', codec: choice.codec }, { timeoutMs: 40_000 });
+
+  const player = new ScreenPlayer(
+    video,
+    ({ state, detail, behindMs }) => {
+      if (state === 'stats') say?.(behindMs > 1500 ? `live · ${(behindMs / 1000).toFixed(1)} s behind` : `live · ${behindMs} ms behind`);
+      else if (state === 'playing') say?.('live');
+      else if (state === 'waiting') say?.('waiting for the first frame…');
+      else if (state === 'error') {
+        say?.('');
+        toast(detail || 'The stream failed.', 'error', 8000);
+      } else if (detail) say?.(detail);
+    },
+    choice.mime,
+  );
+  player.start();
+
+  const offChunk = ctx.relay.on('stream-chunk', (buffer) => player.push(buffer));
+  const offState = ctx.relay.on('stream', (payload) => {
+    if (payload?.state === 'ended') {
+      say?.(payload.reason || 'the stream ended');
+      onEnded?.(payload);
+    }
+  });
+
+  let stopped = false;
+  return {
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      offChunk();
+      offState();
+      player.stop();
+      ctx.relay.request('agent', { code, op: 'stream.stop' }).catch(() => {});
+      ctx.relay.request('stream.leave', {}).catch(() => {});
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Standalone watch page — #/watch/<code>
+ * ------------------------------------------------------------------ */
+
+export async function watchView(root, ctx, arg) {
+  const code = decodeURIComponent(String(arg || ''))
+    .trim()
+    .toUpperCase();
+  ctx.setTitle(`${code || 'Watch'} · Steam Viewer`);
+
+  if (!/^[A-Z0-9]{6,16}$/.test(code)) {
+    root.innerHTML = `<div class="empty"><h2>That watch link is incomplete</h2>
+      <p>A watch link looks like <code>#/watch/K7QM2XPD</code>. Open <a href="#/play">Remote Play</a> and copy the share
+      link from there.</p></div>`;
+    return;
+  }
+
+  root.innerHTML = `
+    <div class="theatre">
+      <div class="theatre__head">
+        <div>
+          <h1 class="theatre__title">Watching <code>${esc(code)}</code></h1>
+          <p class="theatre__meta" id="watch-status">connecting…</p>
+        </div>
+        <div class="stream__actions">
+          <button class="btn btn--ghost btn--sm" type="button" id="watch-full">Fullscreen</button>
+          <button class="btn btn--ghost btn--sm" type="button" id="watch-copy">Copy this link</button>
+          <a class="btn btn--ghost btn--sm" href="#/play">Remote Play</a>
+        </div>
+      </div>
+      <video id="watch-video" class="theatre__video" playsinline muted autoplay></video>
+      <p class="loading-note" style="text-align:left">
+        Everything this page needs is in the address bar — the relay and the pairing code — so the link works in any
+        browser, on any machine, with nothing set up first. Anyone who has it can watch, so treat it like a password.
+      </p>
+    </div>`;
+
+  const video = $('#watch-video', root);
+  const status = $('#watch-status', root);
+  const say = (text) => {
+    status.textContent = text;
+  };
+
+  $('#watch-full', root).addEventListener('click', () => {
+    (video.requestFullscreen?.() || video.webkitEnterFullscreen?.())?.catch?.(() => {});
+  });
+  $('#watch-copy', root).addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(watchLink(ctx.relay.baseUrl, code));
+      toast('Watch link copied', 'ok');
+    } catch {
+      toast('Could not copy — the link is in the address bar', 'info');
+    }
+  });
+
+  let session = null;
+  try {
+    session = await attachStream({ ctx, code, video, say, onEnded: () => say('the stream ended') });
+  } catch (error) {
+    root.innerHTML = errorHtml(error, { retryLabel: 'Try again' });
+    bindRetry(root, () => watchView(root, ctx, arg));
+    return;
+  }
+
+  return () => session?.stop();
+}
+
 export async function playView(root, ctx) {
   ctx.setTitle('Remote Play · Steam Viewer');
   const saved = localStorage.getItem(AGENT_KEY) || '';
@@ -1334,11 +1523,11 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
         <button class="btn btn--ghost btn--sm" type="button" id="agent-refresh">Rescan library</button>
       </div>
 
-      <div class="grid grid--portrait" id="agent-grid"></div>`;
+      <div class="grid grid--installed" id="agent-grid"></div>`;
 
     /* — built-in streaming (agent + ffmpeg) — */
     const builtIn = streaming.builtIn || {};
-    let player = null;
+    let session = null;
 
     const paintBuiltIn = () => {
       const slot = $('#builtin-slot', body);
@@ -1356,12 +1545,17 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
                 ? `<div class="stream__actions">
                      <button class="btn btn--green btn--sm" type="button" id="builtin-start">▶ Start watching</button>
                      <button class="btn btn--ghost btn--sm" type="button" id="builtin-stop" hidden>Stop</button>
+                     <a class="btn btn--ghost btn--sm" href="#/watch/${escAttr(code)}" target="_blank" rel="noopener">Open in a new tab</a>
+                     <button class="btn btn--ghost btn--sm" type="button" id="builtin-share">Copy share link</button>
                      <span class="stream__status" id="builtin-status"></span>
                    </div>
                    <video id="builtin-video" class="stream__video" playsinline muted hidden></video>
                    <p class="loading-note" style="text-align:left">
-                     Encoded on your PC with ffmpeg and delivered through the relay. Around a second behind real time —
-                     good for watching, not for aiming. For low-latency play with controller and mouse input, use the
+                     Encoded on your PC with ffmpeg and delivered through the relay, one frame per fragment so nothing
+                     waits on a buffer. The page shows the delay it is actually measuring rather than a number we
+                     promised. <strong>Open in a new tab</strong> gives a self-contained link — the relay and the
+                     pairing code are both in the URL, so it plays for anyone you send it to, on any machine, with
+                     nothing installed. For controller and mouse <em>input</em> as well as picture, use the
                      moonlight-web-stream panel below.
                    </p>`
                 : `<p class="loading-note" style="text-align:left">
@@ -1383,39 +1577,19 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
         status.textContent = text;
       };
 
-      let offChunk = null;
-
-      const stopWatching = async () => {
-        offChunk?.();
-        offChunk = null;
-        player?.stop();
-        player = null;
+      const stopWatching = () => {
+        session?.stop();
+        session = null;
         video.hidden = true;
         startButton.hidden = false;
         stopButton.hidden = true;
         say('');
-        try {
-          await ctx.relay.request('agent', { code, op: 'stream.stop' });
-          ctx.relay.request('stream.leave', {}).catch(() => {});
-        } catch {
-          /* the agent may already have stopped */
-        }
       };
 
       startButton.addEventListener('click', async () => {
-        // Ask the PC for something this browser can actually decode.
-        const choice = pickCodec();
-        if (!choice) {
-          say('This browser cannot play the stream — no supported video codec.');
-          return;
-        }
         startButton.disabled = true;
-        say('starting the encoder…');
-
         try {
-          // Watch first so the header is not missed, then start the encoder.
-          await ctx.relay.request('stream.watch', { code });
-          await ctx.relay.request('agent', { code, op: 'stream.start', codec: choice.codec }, { timeoutMs: 40_000 });
+          session = await attachStream({ ctx, code, video, say, onEnded: stopWatching });
         } catch (error) {
           say('');
           toast(error.message, 'error', 8000);
@@ -1427,32 +1601,24 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
         startButton.hidden = true;
         startButton.disabled = false;
         stopButton.hidden = false;
-
-        player = new ScreenPlayer(
-          video,
-          ({ state, detail }) => {
-            if (state === 'playing') say('live');
-            else if (state === 'waiting') say('waiting for the first frame…');
-            else if (state === 'error') {
-              say('');
-              toast(detail || 'The stream failed.', 'error', 8000);
-            } else if (detail) say(detail);
-          },
-          choice.mime,
-        );
-        player.start();
-        offChunk = ctx.relay.on('stream-chunk', (buffer) => player?.push(buffer));
       });
 
       stopButton.addEventListener('click', stopWatching);
 
-      // Leaving the page must not leave ffmpeg running on the PC.
-      streamCleanups.push(() => {
-        offChunk?.();
-        player?.stop();
-        ctx.relay.request('agent', { code, op: 'stream.stop' }).catch(() => {});
-        ctx.relay.request('stream.leave', {}).catch(() => {});
+      $('#builtin-share', slot)?.addEventListener('click', async () => {
+        const link = watchLink(ctx.relay.baseUrl, code);
+        try {
+          await navigator.clipboard.writeText(link);
+          toast('Share link copied — it plays anywhere', 'ok', 4000);
+        } catch {
+          // Clipboard access needs a secure context and a user gesture; if the
+          // browser refuses, show the link so it can still be copied by hand.
+          toast(link, 'info', 12_000);
+        }
       });
+
+      // Leaving the page must not leave ffmpeg running on the PC.
+      streamCleanups.push(() => session?.stop());
     };
 
     /* — in-browser streaming via moonlight-web-stream — */
@@ -1575,21 +1741,13 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
       const shown = games.filter((game) => !term || game.name.toLowerCase().includes(term));
       grid.innerHTML =
         shown
-          .map((game) => {
-            const store = art.get(game.appid);
-            const card = {
-              appid: game.appid,
-              name: store?.name || game.name,
-              portrait: store?.portrait,
-              capsule: store?.capsule,
-              header: store?.header,
-            };
-            return `<div class="installed">
-                ${portraitCardHtml(card, { subtitle: game.fullyInstalled ? 'installed' : 'downloading' })}
+          .map(
+            (game) => `<div class="installed">
+                ${installedCard(game, art.get(game.appid))}
                 <button class="btn btn--green btn--sm" type="button" data-launch="${game.appid}">▶ Play on PC</button>
                 ${canStream ? `<button class="btn btn--ghost btn--sm" type="button" data-stream="${game.appid}">▶ Play &amp; stream</button>` : ''}
-              </div>`;
-          })
+              </div>`,
+          )
           .join('') || '<p class="loading-note">No installed games match that filter.</p>';
       attachImageFallbacks(grid);
     };
@@ -1622,11 +1780,20 @@ npm start -- --relay ${esc(ctx.relay.baseUrl || 'https://your-service.onrender.c
         try {
           await ctx.relay.request('agent', { code, op: 'launch', appid });
           toast('Game starting — opening the stream', 'ok');
-          if (streamSecure) {
+
+          // moonlight-web-stream carries input as well as picture, so it wins
+          // when it is set up. Otherwise fall back to the built-in encoder,
+          // which needs nothing installed — previously this branch opened an
+          // empty URL, which is why "Play & stream" appeared to do nothing on
+          // a PC without Sunshine.
+          if (streamUrl && streamSecure) {
             $('#stream-open', body)?.click();
             $('#stream-slot', body)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          } else {
+          } else if (streamUrl) {
             window.open(streamUrl, '_blank', 'noopener');
+          } else if (builtIn.available) {
+            if (!session) $('#builtin-start', body)?.click();
+            $('#builtin-slot', body)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
           }
         } catch (error) {
           toast(error.message, 'error', 7000);

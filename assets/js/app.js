@@ -15,6 +15,7 @@ import {
   playView,
   searchView,
   usersView,
+  watchView,
   wishlistView,
 } from './views.js?v=2026-07-31.4';
 
@@ -333,6 +334,7 @@ function markActiveNav(path) {
     users: 'library',
     wishlist: 'wishlist',
     play: 'play',
+    watch: 'play',
     about: 'about',
   };
   const active = path === 'browse' && parseHash().arg !== 'mostplayed' ? 'home' : map[path] || 'home';
@@ -394,6 +396,9 @@ async function route(force = false) {
         break;
       case 'play':
         result = await playView(main, ctx);
+        break;
+      case 'watch':
+        result = await watchView(main, ctx, arg);
         break;
       case 'developer':
         result = await creatorView(main, ctx, 'developer', arg);

@@ -179,6 +179,19 @@ export function removeViewer(viewer) {
   if (!entry) return;
   entry.viewers.delete(viewer);
   viewersBySocket.delete(viewer);
+
+  // Nobody is watching any more, so the PC should not still be encoding. The
+  // browser normally stops the stream itself, but a closed laptop lid or a
+  // killed tab never gets the chance — without this the encoder runs until the
+  // agent is restarted, burning CPU on someone else's machine.
+  if (entry.viewers.size === 0 && entry.socket.readyState === entry.socket.OPEN) {
+    entry.streamInit = null;
+    try {
+      entry.socket.send(JSON.stringify({ id: makeCode(12), op: 'stream.stop', params: {} }));
+    } catch {
+      /* the agent is going away anyway */
+    }
+  }
 }
 
 export function viewerCount(code) {

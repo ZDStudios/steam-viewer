@@ -2064,6 +2064,86 @@ a.chip:hover {
   justify-content: center;
 }
 
+/* Landscape, because `header.jpg` is the only art every installed app has —
+   portrait `library_600x900` art simply does not exist for a lot of them. */
+.grid--installed {
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 16px;
+}
+.installed__art {
+  position: relative;
+  display: block;
+  aspect-ratio: 460 / 215;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #0b1218;
+}
+.installed__art img {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* Shows through only while the image is missing or still loading. */
+.installed__fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: linear-gradient(160deg, #1b2838, #0f1620);
+}
+.installed__name {
+  font-size: 13px;
+  color: #e6eaee;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.installed__state {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: -4px;
+}
+
+/* =====================================================================
+   Theatre mode — the standalone #/watch/<code> page
+   ===================================================================== */
+
+.theatre__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.theatre__title {
+  font-size: 20px;
+  font-weight: 300;
+  color: #fff;
+}
+.theatre__title code {
+  color: var(--blue);
+}
+.theatre__meta {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+.theatre__video {
+  width: 100%;
+  max-height: calc(100vh - 220px);
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius);
+  background: #000;
+  display: block;
+}
+
 @media (max-width: 760px) {
   .disco__body {
     grid-template-columns: 1fr;

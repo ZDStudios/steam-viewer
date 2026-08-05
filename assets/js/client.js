@@ -272,6 +272,36 @@ export class Relay {
     for (const id of [...this.subscriptions]) this.unsubscribe(id);
   }
 
+  /**
+   * Resolve once the WebSocket is actually open.
+   *
+   * Most actions work equally well over the HTTP fallback, but the screen
+   * stream does not: fragments only arrive as binary frames on the socket, so
+   * `stream.watch` issued over HTTP subscribes a connection that will never
+   * deliver anything. A page opened cold — a shared watch link, say — has to
+   * wait for the socket rather than race it.
+   */
+  whenOnline(timeoutMs = 25_000) {
+    if (this.socket?.readyState === WebSocket.OPEN) return Promise.resolve(true);
+    if (!this.baseUrl) return Promise.resolve(false);
+
+    this.connect();
+
+    return new Promise((resolve) => {
+      let off = null;
+      let timer = null;
+      const settle = (ok) => {
+        clearTimeout(timer);
+        off?.();
+        resolve(ok);
+      };
+      timer = setTimeout(() => settle(false), timeoutMs);
+      off = this.on('state', ({ state }) => {
+        if (state === 'online') settle(true);
+      });
+    });
+  }
+
   /** Wake a sleeping Render container without blocking the UI. */
   async warm() {
     if (!this.baseUrl) return false;
