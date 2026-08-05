@@ -7,6 +7,27 @@
     <meta name="theme-color" content="#171a21" />
     <title>Steam Viewer</title>
 
+    <!--
+      Home-screen install. iOS ignores SVG favicons and manifest icons for
+      "Add to Home Screen" — it wants a real PNG at `apple-touch-icon`, and it
+      composites transparency onto white, so that file is opaque by design.
+      `apple-mobile-web-app-title` is the label under the icon; without it iOS
+      uses the <title>, which is longer than the space allows.
+    -->
+    <link rel="apple-touch-icon" href="./assets/icons/apple-touch-icon.png" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <meta name="apple-mobile-web-app-title" content="Steam Viewer" />
+    <meta name="application-name" content="Steam Viewer" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <!--
+      Launched from the home screen the page runs full-bleed under the status
+      bar, which only works because the layout pads itself out of the safe
+      areas (see `env(safe-area-inset-*)` in the stylesheet).
+    -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="format-detection" content="telephone=no" />
+
     <link rel="preconnect" href="https://cdn.cloudflare.steamstatic.com" />
     <link rel="preconnect" href="https://shared.cloudflare.steamstatic.com" />
     <link

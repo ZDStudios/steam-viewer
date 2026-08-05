@@ -61,6 +61,10 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
+  /* Launched from an iOS home screen the page runs under the status bar and
+     the home indicator, so the chrome has to keep clear of both. Zero on every
+     other device, so this costs nothing elsewhere. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   font-family: var(--font);
   font-size: 14px;
   line-height: 1.5;
@@ -1492,7 +1496,8 @@ a.chip:hover {
   font-size: 13px;
 }
 .toolbar input[type="search"] {
-  min-width: 220px;
+  flex: 1 1 220px;
+  min-width: 0;
 }
 
 .formrow {
@@ -1508,7 +1513,11 @@ a.chip:hover {
   border-radius: 2px;
   padding: 9px 12px;
   color: var(--text);
-  min-width: 280px;
+  /* Grows to the row, shrinks below its ideal width rather than pushing the
+     page sideways — `min-width` alone would not shrink at all. */
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* =====================================================================
@@ -1813,10 +1822,6 @@ a.chip:hover {
   }
   .conn {
     padding: 7px;
-  }
-  .dropdown__menu {
-    left: auto;
-    right: 0;
   }
   .storenav__inner {
     flex-wrap: wrap;
@@ -2581,6 +2586,19 @@ a.chip:hover {
   background: rgba(0, 0, 0, 0.25);
   border-radius: var(--radius);
   overflow: hidden;
+  /* Trailer URLs are long and unbreakable, and an auto-layout table sizes
+     itself to its widest cell — which pushed the whole page sideways on a
+     phone. Fixed layout makes the columns obey the container instead. */
+  table-layout: fixed;
+}
+.diag td:first-child,
+.diag th:first-child {
+  width: 26px;
+}
+.diag td:last-child,
+.diag th:last-child {
+  width: 62px;
+  text-align: right;
 }
 .diag td {
   padding: 7px 10px;
@@ -2684,4 +2702,106 @@ a.chip:hover {
   font-size: 12px;
   color: var(--text-dim);
   align-self: center;
+}
+
+
+/* =====================================================================
+   Touch sizing — last on purpose
+   =====================================================================
+   These are overrides of component rules defined above, and CSS resolves a
+   tie on specificity by source order. Anywhere earlier in the file and a
+   later `.card__wish { width: 28px }` silently wins, which is exactly what
+   happened the first time. Keep this block at the end.
+
+   Two distinct problems, both invisible on a desktop:
+
+   • Controls sized for a mouse cursor sit around 28px, below what a fingertip
+     reliably hits.
+   • iOS zooms the whole page when a focused input's text is under 16px, and
+     on a hash-routed page that leaves you scrolled sideways with no obvious
+     way back. 16px is a threshold, not a preference.
+   ===================================================================== */
+
+@media (max-width: 720px) {
+  input,
+  select,
+  textarea,
+  .region select,
+  .toolbar input[type="search"],
+  .toolbar select,
+  .formrow input,
+  .searchbox input {
+    font-size: 16px;
+  }
+
+  .searchbox input,
+  .toolbar input[type="search"],
+  .toolbar select,
+  .formrow input,
+  .field input {
+    min-height: 40px;
+  }
+  .region select {
+    min-height: 36px;
+    max-width: 124px;
+  }
+  .searchbox__go {
+    width: 40px;
+    min-height: 40px;
+  }
+  .conn {
+    min-width: 36px;
+    min-height: 36px;
+    justify-content: center;
+  }
+  .icon-btn {
+    width: 36px;
+    height: 36px;
+  }
+  .btn,
+  .tabs button {
+    min-height: 38px;
+  }
+  .btn--sm {
+    min-height: 34px;
+  }
+  .card__wish {
+    width: 36px;
+    height: 36px;
+    font-size: 17px;
+  }
+  .player__thumb {
+    min-height: 44px;
+  }
+  .hero__arrow {
+    width: 40px;
+  }
+
+  /* The dot stays a thin bar; the button around it grows to a thumb. The hit
+     area is the control, not the ink. */
+  .hero__dots {
+    gap: 2px;
+    margin-top: 4px;
+  }
+  .hero__dot {
+    width: 34px;
+    height: 32px;
+    background: none;
+    display: grid;
+    place-items: center;
+  }
+  .hero__dot::before {
+    content: '';
+    display: block;
+    width: 22px;
+    height: 6px;
+    border-radius: 1px;
+    background: rgba(255, 255, 255, 0.18);
+  }
+  .hero__dot.is-active {
+    background: none;
+  }
+  .hero__dot.is-active::before {
+    background: var(--blue);
+  }
 }
