@@ -333,6 +333,45 @@ export function videoCandidates(url) {
   });
 }
 
+/**
+ * Trailer addresses derived from the movie's id, for when `appdetails` gives
+ * none at all.
+ *
+ * This is not a nicety. Steam's store API returns plenty of movie entries with
+ * a working `thumbnail`, an id, a name — and no `mp4` or `webm` keys
+ * whatsoever, which left nothing to play and no way to tell that apart from a
+ * game with no trailers. The files are still there; only the pointers are
+ * missing from that payload.
+ *
+ * Trailers live at a predictable path, so the id is enough to rebuild them.
+ * These are guesses, which is exactly why they are probed before use — an
+ * address that does not answer never reaches the browser as a working source.
+ */
+const TRAILER_FILES = [
+  'movie_max.mp4',
+  'movie480.mp4',
+  'movie_max_vp9.webm',
+  'movie480_vp9.webm',
+  'movie_max.webm',
+  'movie480.webm',
+];
+
+function derivedTrailerUrls(movie) {
+  const id = Number(movie?.id);
+  if (!Number.isFinite(id) || id <= 0) return [];
+
+  // The thumbnail usually sits in the trailer's own directory, so when it does
+  // it names the exact folder rather than one this code assumed.
+  const base = (() => {
+    const thumb = secureUrl(movie.thumbnail) || '';
+    const match = /^(https:\/\/[^/]+\/store_trailers\/\d+)\//.exec(thumb);
+    if (match) return match[1];
+    return `https://video.cloudflare.steamstatic.com/store_trailers/${id}`;
+  })();
+
+  return TRAILER_FILES.map((file) => `${base}/${file}`);
+}
+
 /** Does this URL actually serve bytes? Asks for a single byte. */
 async function urlWorks(url, timeoutMs = 7000) {
   try {
@@ -359,12 +398,25 @@ async function urlWorks(url, timeoutMs = 7000) {
  */
 export async function resolveMovies(movies = [], { max = 3 } = {}) {
   const probed = await mapPool(movies.slice(0, max), 2, async (movie) => {
-    const candidates = movie.sources || [];
-    for (const candidate of candidates.slice(0, 4)) {
-      const { value } = await cache.wrap(`vid:${candidate}`, 6 * 60 * 60_000, () => urlWorks(candidate));
-      if (value) {
-        return { ...movie, sources: [candidate, ...candidates.filter((url) => url !== candidate)], verified: true };
-      }
+    const candidates = (movie.sources || []).slice(0, 8);
+
+    // Probed together rather than one after another. Sequential probing was
+    // affordable when there were four addresses Steam had actually named; with
+    // addresses rebuilt from the id there are more of them and most are
+    // expected to miss, so eight timeouts back to back would outlast the
+    // browser's own patience with the request.
+    const checked = await mapPool(candidates, 4, async (url) => {
+      const { value } = await cache.wrap(`vid:${url}`, 6 * 60 * 60_000, () => urlWorks(url, 6000));
+      return value ? url : null;
+    });
+
+    const winner = checked.find(Boolean);
+    if (winner) {
+      return {
+        ...movie,
+        sources: [winner, ...(movie.sources || []).filter((url) => url !== winner)],
+        verified: true,
+      };
     }
     return { ...movie, verified: false };
   });
@@ -417,18 +469,34 @@ export function toFull(data) {
     movies: (data.movies || []).map((movie) => {
       // Preference order: high-bitrate mp4, 480p mp4, then webm — each
       // expanded across every CDN host Steam is known to serve trailers from.
-      const sources = [
+      const quoted = [
         ...videoCandidates(movie.mp4?.max),
         ...videoCandidates(movie.mp4?.['480']),
         ...videoCandidates(movie.webm?.max),
         ...videoCandidates(movie.webm?.['480']),
-      ].filter((url, index, all) => url && all.indexOf(url) === index);
+      ];
+
+      // Steam frequently sends a movie with a thumbnail and an id but no
+      // addresses at all. Rebuilding them from the id is the difference
+      // between a playable trailer and an empty box.
+      const derivedBase = derivedTrailerUrls(movie);
+      const derived = [
+        // Every format on the host the thumbnail came from, first...
+        ...derivedBase,
+        // ...then the same formats on the other CDN hosts.
+        ...derivedBase.flatMap((url) => videoCandidates(url).slice(1)),
+      ];
+
+      const sources = [...quoted, ...derived].filter((url, index, all) => url && all.indexOf(url) === index);
 
       return {
         id: movie.id,
         name: movie.name,
         thumb: secureUrl(movie.thumbnail),
         highlight: Boolean(movie.highlight),
+        // Says whether Steam actually named these or we worked them out, so
+        // the page and the diagnostics can be honest about which it is.
+        derivedOnly: quoted.length === 0 && derived.length > 0,
         sources,
         mp4: sources[0] || null,
       };

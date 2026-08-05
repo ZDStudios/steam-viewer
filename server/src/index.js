@@ -305,7 +305,9 @@ app.get('/trailer/:appid', mediaThrottle, async (req, res) => {
   // Ask for a byte from each candidate until one answers, then stream that one.
   // The Range header is forwarded so the browser can still seek.
   const tried = [];
-  for (const candidate of (movie.sources || []).slice(0, 8)) {
+  // More than the browser walks, because addresses rebuilt from the movie id
+  // are expected to miss more often than ones Steam named.
+  for (const candidate of (movie.sources || []).slice(0, 14)) {
     tried.push(candidate);
     let upstream;
     try {
