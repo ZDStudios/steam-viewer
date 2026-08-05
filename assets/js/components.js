@@ -1,6 +1,6 @@
 /** Reusable pieces of Steam-flavoured UI: cards, price blocks, media player,
  *  carousel, lightbox and toasts. */
-import { $, $$, attachImageFallbacks, attachMediaFallbacks, el, esc, escAttr, formatMoney, videoCandidates } from './util.js?v=2026-08-05.2';
+import { $, $$, attachImageFallbacks, attachMediaFallbacks, el, esc, escAttr, formatMoney, imageCandidates, resolvePoster, videoCandidates } from './util.js?v=2026-08-05.2';
 
 /* ------------------------------------------------------------------ *
  * Atoms
@@ -444,7 +444,6 @@ export function mountPlayer(root, media, { onZoom } = {}) {
 
     if (entry.kind === 'video') {
       const video = document.createElement('video');
-      video.poster = entry.poster || entry.thumb;
       video.controls = true;
       video.preload = 'metadata';
       video.playsInline = true;
@@ -475,6 +474,15 @@ export function mountPlayer(root, media, { onZoom } = {}) {
               </div>`),
         );
       });
+
+      // Steam quotes trailer thumbnails on `cdn.akamai`, which no longer
+      // answers, and `poster` has no fallback of its own — so an unresolvable
+      // poster shows plain black, which reads as "the trailer is broken" even
+      // when it is about to play perfectly well.
+      resolvePoster(video, [
+        ...imageCandidates(entry.poster || entry.thumb),
+        ...imageCandidates(entry.fallbackPoster),
+      ]);
 
       stage.appendChild(video);
       attachMediaFallbacks(stage);

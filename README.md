@@ -286,6 +286,22 @@ sits on a black frame forever with a list of working alternates untouched
 beside it. Every dead end has a time limit now, not just the ones polite enough
 to fail.
 
+Behind all of them sits **`GET /trailer/:appid`**, where the relay resolves the
+address itself and streams whichever source responds. Every other route depends
+on the browser holding a Steam URL that still works — `appdetails` hands out
+addresses on hosts Valve retired, the page guesses replacements, and a wrong
+guess, a blocked video CDN, an extension or an http address on an https page
+all end the same way. This one asks a server the page is already talking to,
+so none of that applies. It is last in the list, reached only after Steam's own
+addresses have failed.
+
+Trailer *posters* get the same treatment, which is easy to overlook: `poster`
+takes a single URL with no fallback, and Steam quotes trailer thumbnails on
+`cdn.akamai`, so an unresolvable poster leaves a black rectangle that looks
+exactly like a broken trailer even when the video is about to play. Each
+candidate is loaded off-screen and only one that decoded is handed to the
+element, falling back to the game's header image.
+
 On Render's free tier this costs bandwidth, so it only ever engages as a
 fallback — a healthy connection to Steam never touches it. Decorative
 autoplaying video (discovery tiles, hover microtrailers) is deliberately

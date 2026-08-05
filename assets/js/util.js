@@ -469,6 +469,61 @@ export function videoCandidates(url) {
   });
 }
 
+/** Steam's image CDN hosts, for the same host-swapping trick as the videos. */
+const IMAGE_HOSTS = [
+  'cdn.cloudflare.steamstatic.com',
+  'cdn.fastly.steamstatic.com',
+  'shared.cloudflare.steamstatic.com',
+  'shared.fastly.steamstatic.com',
+  'cdn.akamai.steamstatic.com',
+];
+
+/** Every host a Steam image might still be served from, best guess first. */
+export function imageCandidates(url) {
+  if (!url) return [];
+  const secure = String(url).replace(/^http:\/\//i, 'https://');
+  let parsed;
+  try {
+    parsed = new URL(secure);
+  } catch {
+    return [secure];
+  }
+  const hosts = [parsed.host, ...IMAGE_HOSTS.filter((host) => host !== parsed.host)];
+  return hosts.map((host) => {
+    const candidate = new URL(secure);
+    candidate.host = host;
+    return candidate.toString();
+  });
+}
+
+/**
+ * Give a <video> a poster that actually exists.
+ *
+ * `poster` takes one URL and has no fallback of its own — if it 404s the
+ * element just shows black, which is indistinguishable from a trailer that
+ * failed to load. Steam's trailer thumbnails are quoted on `cdn.akamai`, a
+ * host that no longer answers, so this is the normal case rather than the
+ * unlucky one. Each candidate is loaded off-screen first and only a URL that
+ * decoded is handed to the element.
+ */
+export function resolvePoster(video, candidates = []) {
+  const list = candidates.filter(Boolean);
+  let index = 0;
+
+  const tryNext = () => {
+    if (index >= list.length) return;
+    const url = list[index++];
+    const probe = new Image();
+    probe.onload = () => {
+      video.poster = url;
+    };
+    probe.onerror = tryNext;
+    probe.src = url;
+  };
+
+  tryNext();
+}
+
 /**
  * The relay's own copy of a trailer.
  *

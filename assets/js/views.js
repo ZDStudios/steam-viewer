@@ -531,6 +531,9 @@ export async function appView(root, ctx, appid) {
         // adds stall time before the relay gets its turn.
         sources: [...movieSources(movie).slice(0, 6), relayTrailer(game.appid, index)].filter(Boolean),
         poster: movie.thumb,
+        // The header image is the one picture every app definitely has, so it
+        // stands in when the trailer's own thumbnail cannot be resolved.
+        fallbackPoster: game.header || game.capsule,
         label: movie.name || 'Trailer',
       }))
       .filter((entry) => entry.sources.length > 0),
