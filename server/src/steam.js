@@ -372,6 +372,49 @@ function derivedTrailerUrls(movie) {
   return TRAILER_FILES.map((file) => `${base}/${file}`);
 }
 
+/**
+ * Read a game's real trailer addresses off the store page.
+ *
+ * Rebuilding addresses from the movie id assumes Steam's filenames, and that
+ * assumption is the weak part: it holds for most trailers and misses the rest,
+ * and a miss looks exactly like a game with no trailers. The store page needs
+ * no assuming — it is the page Steam itself renders to play these, so whatever
+ * names are current appear in it verbatim.
+ *
+ * A fallback, not the main path: one extra request, made only for a game whose
+ * `appdetails` payload named no addresses at all.
+ */
+const STORE_TRAILER_RE = /https?:\/\/[^"'\s\\]*?\/store_trailers\/(\d+)\/([^"'\s\\?]+\.(?:mp4|webm))(\?[^"'\s\\]*)?/gi;
+
+export async function trailerUrlsFromStorePage({ appid, cc = 'us', l = 'english' } = {}) {
+  const id = Number(appid);
+  if (!Number.isFinite(id) || id <= 0) return new Map();
+
+  const { value } = await cache.wrap(`trailerpage:${id}:${cc}:${l}`, TTL.app, async () => {
+    let html;
+    try {
+      html = await fetchText(`${STORE}/app/${id}/?${qs({ cc, l })}`, { timeoutMs: 15_000, retries: 1 });
+    } catch {
+      return [];
+    }
+
+    // Grouped by the trailer's own folder — which is the movie id — so each
+    // movie gets its own addresses instead of the whole page's in a heap.
+    const found = new Map();
+    for (const match of html.matchAll(STORE_TRAILER_RE)) {
+      const url = secureUrl(match[0]);
+      if (!url) continue;
+      const list = found.get(match[1]) || [];
+      if (!list.includes(url)) list.push(url);
+      found.set(match[1], list);
+    }
+    // A Map does not survive the cache as itself; its entries do.
+    return [...found.entries()];
+  });
+
+  return new Map(value || []);
+}
+
 /** Does this URL actually serve bytes? Asks for a single byte. */
 async function urlWorks(url, timeoutMs = 7000) {
   try {

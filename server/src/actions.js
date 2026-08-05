@@ -18,7 +18,7 @@ import { cache, SteamError, TTL } from './steam.js';
  * deploying from the wrong branch" is distinguishable from "the feature is
  * broken" — they look identical from the browser otherwise.
  */
-export const BUILD = '2026-08-05.3';
+export const BUILD = '2026-08-05.4';
 
 export const FEATURES = [
   'trailer-probe', // movies carry a probed `sources` list
@@ -37,6 +37,7 @@ export const FEATURES = [
   'steam-openid', // /auth/steam — sign in through Steam
   'trailer-serve', // GET /trailer/:appid — the relay resolves and streams it
   'trailer-derive', // trailer addresses rebuilt from the movie id
+  'trailer-storepage', // real addresses read off the store page when needed
 ];
 
 const str = (value, fallback = '') => (typeof value === 'string' ? value.trim() : fallback);
@@ -124,6 +125,31 @@ export const ACTIONS = {
 
       const details = await steam.getAppDetails({ appid: id, cc, l });
       const game = steam.toFull(details);
+
+      // When Steam named no addresses for a trailer, the ones rebuilt from the
+      // movie id are guesses at its filenames — good guesses, but the store
+      // page states the real ones, so ask it rather than hope. One extra
+      // request, only for a game that needs it, cached with the page.
+      if ((game.movies || []).some((movie) => movie.derivedOnly)) {
+        try {
+          const real = await steam.trailerUrlsFromStorePage({ appid: id, cc, l });
+          if (real.size) {
+            game.movies = game.movies.map((movie) => {
+              const stated = real.get(String(movie.id));
+              if (!stated?.length) return movie;
+              return {
+                ...movie,
+                // Stated first, guesses kept behind them as a safety net.
+                sources: [...stated, ...movie.sources].filter((url, index, all) => all.indexOf(url) === index),
+                derivedOnly: false,
+                fromStorePage: true,
+              };
+            });
+          }
+        } catch {
+          // The rebuilt addresses are still there to try.
+        }
+      }
 
       // Verify trailer URLs here rather than letting the browser discover a
       // dead CDN host mid-playback. Cached with the rest of the page.

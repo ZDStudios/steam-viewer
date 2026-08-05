@@ -6,7 +6,7 @@
  * blocked upgrade, sleeping free-tier container) the same actions are issued
  * over `GET /api/:action` instead, so the site degrades instead of breaking.
  */
-import { uid } from './util.js?v=2026-08-05.3';
+import { uid } from './util.js?v=2026-08-05.4';
 
 const STATES = ['idle', 'connecting', 'online', 'rest', 'offline'];
 

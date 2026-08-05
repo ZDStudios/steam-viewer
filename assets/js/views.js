@@ -17,12 +17,12 @@ import {
   skeletonGrid,
   skeletonPage,
   toast,
-} from './components.js?v=2026-08-05.3';
-import * as account from './account.js?v=2026-08-05.3';
-import { renderRichText } from './sanitize.js?v=2026-08-05.3';
-import * as wishlist from './wishlist.js?v=2026-08-05.3';
-import { pickCodec, ScreenPlayer } from './screen.js?v=2026-08-05.3';
-import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime, movieSources, proxied, relayTrailer } from './util.js?v=2026-08-05.3';
+} from './components.js?v=2026-08-05.4';
+import * as account from './account.js?v=2026-08-05.4';
+import { renderRichText } from './sanitize.js?v=2026-08-05.4';
+import * as wishlist from './wishlist.js?v=2026-08-05.4';
+import { pickCodec, ScreenPlayer } from './screen.js?v=2026-08-05.4';
+import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime, movieSources, proxied, relayTrailer } from './util.js?v=2026-08-05.4';
 
 /** Card options every grid shares: hide ignored titles, mark wishlisted ones. */
 const cardOpts = (extra = {}) => ({ isWishlisted: (appid) => wishlist.has(appid), ...extra });

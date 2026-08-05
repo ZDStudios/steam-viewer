@@ -1,9 +1,9 @@
 /** Boot, header wiring and the hash router. */
-import * as account from './account.js?v=2026-08-05.3';
-import { normalizeBase, Relay } from './client.js?v=2026-08-05.3';
-import { toast } from './components.js?v=2026-08-05.3';
-import { $, $$, attachImageFallbacks, debounce, esc, escAttr, formatMoney, REGIONS, scrollToTop, setMediaProxy } from './util.js?v=2026-08-05.3';
-import * as wishlist from './wishlist.js?v=2026-08-05.3';
+import * as account from './account.js?v=2026-08-05.4';
+import { normalizeBase, Relay } from './client.js?v=2026-08-05.4';
+import { toast } from './components.js?v=2026-08-05.4';
+import { $, $$, attachImageFallbacks, debounce, esc, escAttr, formatMoney, REGIONS, scrollToTop, setMediaProxy } from './util.js?v=2026-08-05.4';
+import * as wishlist from './wishlist.js?v=2026-08-05.4';
 import {
   aboutView,
   appView,
@@ -18,7 +18,7 @@ import {
   usersView,
   watchView,
   wishlistView,
-} from './views.js?v=2026-08-05.3';
+} from './views.js?v=2026-08-05.4';
 
 const CONFIG = window.STEAM_VIEWER_CONFIG || {};
 const LS = {
@@ -506,7 +506,7 @@ if (signIn?.steamid) {
 if (!window.location.hash) window.location.replace(`${window.location.pathname}${window.location.search}#/`);
 
 /** What this copy of the page is; shown in diagnostics and the footer. */
-export const CLIENT_BUILD = CONFIG.build || '2026-08-05.3';
+export const CLIENT_BUILD = CONFIG.build || '2026-08-05.4';
 window.STEAM_VIEWER_CLIENT_BUILD = CLIENT_BUILD;
 
 async function loadCapabilities() {
