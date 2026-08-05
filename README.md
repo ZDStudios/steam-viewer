@@ -280,8 +280,19 @@ image/video/audio responses are returned, `Range` is forwarded so video seeking
 still works, and it has its own per-IP rate limit (`MEDIA_LIMIT_PER_MIN`,
 default 900). Size is capped by `MEDIA_MAX_BYTES` (default 64 MB).
 
+Trailers go through the same walker, which matters more than it sounds: a CDN
+host that *hangs* never fires an `error`, so a player driven by errors alone
+sits on a black frame forever with a list of working alternates untouched
+beside it. Every dead end has a time limit now, not just the ones polite enough
+to fail.
+
 On Render's free tier this costs bandwidth, so it only ever engages as a
-fallback — a healthy connection to Steam never touches it.
+fallback — a healthy connection to Steam never touches it. Decorative
+autoplaying video (discovery tiles, hover microtrailers) is deliberately
+excluded: it still walks CDN hosts, which is free, but it will not stream
+through your relay. Nobody asked to watch it, and a grid of them would spend
+real bandwidth on motion the visitor never requested. A trailer someone
+actually clicked still gets the relay.
 
 ## When something is not showing
 

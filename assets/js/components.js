@@ -135,6 +135,9 @@ export function attachHoverPreviews(root = document) {
         const candidates = videoCandidates(card.dataset.preview);
         video.src = candidates[0];
         video.dataset.fallback = candidates.slice(1).join('|');
+        // Decorative, and a sweep across a grid would start a lot of these —
+        // walking CDN hosts is free, streaming them through the relay is not.
+        video.dataset.noProxy = '1';
         video.muted = true;
         video.loop = true;
         video.playsInline = true;
@@ -208,8 +211,12 @@ export function discoveryRowHtml(row, { wishlisted = false } = {}) {
               // showing a still, and the relay has been sending the clip all
               // along — it was simply never rendered. Muted and looping, so it
               // behaves like the store's tile and needs no interaction.
+              // data-no-proxy: nobody asked to watch this, so it walks CDN
+              // hosts but never spends relay bandwidth. If Steam cannot serve
+              // it, the poster still is the right outcome.
               `<video src="${escAttr(trailer[0])}" data-fallback="${escAttr(trailer.slice(1).join('|'))}"
-                      poster="${escAttr(item.preview?.thumb || hero)}" muted loop playsinline autoplay
+                      data-no-proxy="1" poster="${escAttr(item.preview?.thumb || hero)}"
+                      muted loop playsinline autoplay
                       preload="metadata" aria-label="${escAttr(`${item.name} trailer`)}"></video>
                <span class="disco__playing">TRAILER</span>`
             : `<img src="${escAttr(hero)}" data-fallback="${escAttr(imageChain(item, hero))}" alt="${escAttr(item.name)}" loading="lazy" decoding="async" />`

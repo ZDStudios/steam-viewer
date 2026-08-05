@@ -270,7 +270,7 @@ function advanceMedia(node) {
   if (candidate) {
     // Once the CDN has proved unreachable, do not spend another few seconds
     // finding that out again for every alternate host.
-    if (!node.dataset.relayTried && proxyFirst() && isSteamAsset(candidate)) {
+    if (!node.dataset.noProxy && !node.dataset.relayTried && proxyFirst() && isSteamAsset(candidate)) {
       const viaRelay = proxied(candidate);
       if (viaRelay) {
         node.dataset.originalSrc = candidate;
@@ -287,7 +287,7 @@ function advanceMedia(node) {
 
   // Last resort: pull it through the relay, which often has a better route to
   // Steam than the visitor does.
-  if (!node.dataset.relayTried && routeViaRelay(node, node.dataset.originalSrc || node.currentSrc || node.src)) {
+  if (!node.dataset.noProxy && !node.dataset.relayTried && routeViaRelay(node, node.dataset.originalSrc || node.currentSrc || node.src)) {
     rescues += 1;
     return;
   }
@@ -325,8 +325,9 @@ function advanceMedia(node) {
 function watchMedia(node, url) {
   clearTimeout(Number(node.dataset.slowTimer) || 0);
 
-  const canRelay = Boolean(mediaProxyBase) && !node.dataset.relayTried && !node.dataset.proxied && isSteamAsset(url);
-  const canAdvance = Boolean(node.dataset.fallback) || (Boolean(mediaProxyBase) && !node.dataset.relayTried);
+  const canRelay =
+    Boolean(mediaProxyBase) && !node.dataset.noProxy && !node.dataset.relayTried && !node.dataset.proxied && isSteamAsset(url);
+  const canAdvance = Boolean(node.dataset.fallback) || canRelay;
   if (!canRelay && !canAdvance) return;
 
   const timer = setTimeout(() => {
@@ -392,6 +393,13 @@ function watchWhenVisible(node, url) {
  * Assets without a fallback chain (avatars, screenshots, community art) get
  * the relay treatment too: they are the ones with no alternate host to try, so
  * the relay is their only route.
+ *
+ * `data-no-proxy` opts an element out of the relay while keeping the CDN
+ * walking. It is for decorative autoplaying video — discovery tiles, hover
+ * microtrailers — which nobody asked to watch. Walking CDN hosts is free;
+ * streaming a trailer through someone's Render instance is not, and a grid of
+ * them would spend real bandwidth on motion the visitor never requested. A
+ * trailer somebody actually clicked still gets the relay.
  */
 export function attachMediaFallbacks(root = document) {
   for (const node of $$('img, video', root)) {
@@ -414,7 +422,7 @@ export function attachMediaFallbacks(root = document) {
       // The browser starts loading as soon as innerHTML is assigned, which is
       // before this listener exists, so a failure may already have happened.
       advanceMedia(node);
-    } else if (proxyFirst() && isSteamAsset(src)) {
+    } else if (!node.dataset.noProxy && proxyFirst() && isSteamAsset(src)) {
       if (routeViaRelay(node, src)) watchMedia(node, proxied(src) || src);
     } else if (!hasArrived(node)) {
       watchWhenVisible(node, src);
