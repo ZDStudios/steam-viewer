@@ -73,6 +73,22 @@ Two runtime overrides also work and need no rebuild:
 - `?server=https://your-service.onrender.com` in the address bar
 - the **gear icon** in the header — saved to `localStorage`
 
+## Adding it to a phone
+
+The page is a standalone web app: on iOS, Share ▸ **Add to Home Screen** gives
+it a proper icon and launches it without Safari's chrome; Android's "Install
+app" does the same from the manifest.
+
+iOS ignores SVG favicons and manifest icons for this, so the icon is a real
+opaque PNG at `apple-touch-icon` with the artwork inset clear of the squircle
+mask iOS applies. Launched from the home screen the page runs under the status
+bar and the home indicator, and the layout pads itself out of both safe areas.
+
+The layout is checked at 320 / 390 / 430px across every view for sideways
+scroll, tap targets under a fingertip, and inputs below 16px — that last one
+matters because iOS zooms the whole page when you focus a smaller input, which
+on a hash-routed page leaves you scrolled sideways with no obvious way back.
+
 ## 3. Turn on GitHub Pages
 
 **Settings ▸ Pages ▸ Source: GitHub Actions.** The workflow in

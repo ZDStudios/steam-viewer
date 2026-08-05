@@ -306,13 +306,18 @@ export function heroHtml(items) {
   const first = items[0];
   const art = first.capsule || first.header;
   return `<div class="hero" id="hero">
-    <button class="hero__arrow hero__arrow--prev" type="button" aria-label="Previous">&#8249;</button>
-    <button class="hero__arrow hero__arrow--next" type="button" aria-label="Next">&#8250;</button>
     <div class="hero__frame">
-      <a class="hero__media" id="hero-media" href="#/app/${first.appid}" style="--hero-bg:url(&quot;${escAttr(art)}&quot;)">
-        <img id="hero-img" src="${escAttr(art)}" data-fallback="${escAttr(imageChain(first, art))}"
-             alt="${escAttr(first.name)}" />
-      </a>
+      <!-- The arrows live inside the artwork, not the frame: once the frame
+           stacks on a phone, "vertically centred on the frame" puts them on
+           the seam between the picture and the text below it. -->
+      <div class="hero__stage">
+        <a class="hero__media" id="hero-media" href="#/app/${first.appid}" style="--hero-bg:url(&quot;${escAttr(art)}&quot;)">
+          <img id="hero-img" src="${escAttr(art)}" data-fallback="${escAttr(imageChain(first, art))}"
+               alt="${escAttr(first.name)}" />
+        </a>
+        <button class="hero__arrow hero__arrow--prev" type="button" aria-label="Previous">&#8249;</button>
+        <button class="hero__arrow hero__arrow--next" type="button" aria-label="Next">&#8250;</button>
+      </div>
       <div class="hero__side">
         <a class="hero__title" id="hero-title" href="#/app/${items[0].appid}">${esc(items[0].name)}</a>
         <div class="hero__desc" id="hero-desc">${esc(items[0].shortDescription || '')}</div>

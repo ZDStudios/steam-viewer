@@ -204,6 +204,7 @@ h4 {
   margin-right: auto;
 }
 .topbar__nav a {
+  white-space: nowrap;
   padding: 8px 12px;
   font-size: 13px;
   letter-spacing: 0.6px;
@@ -648,10 +649,15 @@ a.chip:hover {
   box-shadow: 0 0 16px rgba(0, 0, 0, 0.55);
 }
 
-.hero__media {
+.hero__stage {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
+}
+.hero__media {
+  position: relative;
+  display: block;
+  width: 100%;
   background: #0b1218;
   overflow: hidden;
   /* The capsule's own ratio drives the height, so nothing is ever cropped or
@@ -752,8 +758,7 @@ a.chip:hover {
   border-radius: 0 3px 3px 0;
 }
 .hero__arrow--next {
-  /* Sits at the right edge of the artwork, not the panel beside it. */
-  right: var(--hero-side);
+  right: 0;
   border-radius: 3px 0 0 3px;
 }
 
@@ -1486,7 +1491,7 @@ a.chip:hover {
   flex-wrap: wrap;
   margin-bottom: 16px;
 }
-.toolbar input[type="search"],
+.toolbar input,
 .toolbar select {
   background: #0f171f;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -1498,6 +1503,9 @@ a.chip:hover {
 .toolbar input[type="search"] {
   flex: 1 1 220px;
   min-width: 0;
+}
+.toolbar input[type="number"] {
+  width: 120px;
 }
 
 .formrow {
@@ -1768,15 +1776,8 @@ a.chip:hover {
     flex-direction: column;
     height: auto;
   }
-  .hero__media {
-    height: auto;
-    aspect-ratio: 616 / 353;
-  }
   .hero__side {
     flex: 1 1 auto;
-  }
-  .hero__arrow--next {
-    right: 0;
   }
   .topbar__nav a {
     padding: 8px;
@@ -2727,7 +2728,7 @@ a.chip:hover {
   select,
   textarea,
   .region select,
-  .toolbar input[type="search"],
+  .toolbar input,
   .toolbar select,
   .formrow input,
   .searchbox input {
@@ -2735,7 +2736,7 @@ a.chip:hover {
   }
 
   .searchbox input,
-  .toolbar input[type="search"],
+  .toolbar input,
   .toolbar select,
   .formrow input,
   .field input {
@@ -2803,5 +2804,15 @@ a.chip:hover {
   }
   .hero__dot.is-active::before {
     background: var(--blue);
+  }
+
+  /* A title and its "see all" link do not fit side by side on a phone. */
+  .section__head {
+    flex-wrap: wrap;
+    align-items: baseline;
+  }
+  .section__title small {
+    display: block;
+    margin-left: 0;
   }
 }
