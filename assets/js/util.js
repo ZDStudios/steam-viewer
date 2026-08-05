@@ -186,7 +186,15 @@ const IS_VIDEO = (node) => node.tagName === 'VIDEO';
 const hasArrived = (node) => (IS_VIDEO(node) ? node.readyState >= 1 : node.complete && node.naturalWidth > 0);
 /** The event that says so. */
 const arrivalEvent = (node) => (IS_VIDEO(node) ? 'loadedmetadata' : 'load');
-const stallMs = (node) => (IS_VIDEO(node) ? SLOW_VIDEO_MS : SLOW_IMAGE_MS);
+/**
+ * How long to wait before treating a request as dead.
+ *
+ * Once the relay is out of the picture the only remaining explanation is a
+ * slow-but-live connection, and the right response to slow is patience, not
+ * more requests — so the budget doubles rather than churning through every
+ * host on a connection that would have delivered given a moment.
+ */
+const stallMs = (node) => (IS_VIDEO(node) ? SLOW_VIDEO_MS : SLOW_IMAGE_MS) * (node.dataset.relayTried ? 2 : 1);
 
 /**
  * How many assets the relay has had to rescue.
@@ -244,6 +252,17 @@ function routeViaRelay(node, url) {
 
 /** Move an element on to the next candidate URL in its fallback chain. */
 function advanceMedia(node) {
+  // Getting here while pointed at the relay means the relay could not serve
+  // this either. Record that and go back to being "direct", because
+  // `proxied` describes the *current* source — leaving it set was what
+  // silently disabled every later stall timer, so one failed relay attempt
+  // dropped the element back to error-only walking and it hung on the next
+  // unresponsive host indefinitely.
+  if (node.dataset.proxied === '1') {
+    node.dataset.relayTried = '1';
+    delete node.dataset.proxied;
+  }
+
   const remaining = (node.dataset.fallback || '').split('|').filter(Boolean);
   const candidate = remaining.shift();
   node.dataset.fallback = remaining.join('|');
@@ -251,12 +270,13 @@ function advanceMedia(node) {
   if (candidate) {
     // Once the CDN has proved unreachable, do not spend another few seconds
     // finding that out again for every alternate host.
-    if (proxyFirst() && isSteamAsset(candidate)) {
+    if (!node.dataset.relayTried && proxyFirst() && isSteamAsset(candidate)) {
       const viaRelay = proxied(candidate);
       if (viaRelay) {
         node.dataset.originalSrc = candidate;
         node.dataset.proxied = '1';
         setSource(node, viaRelay);
+        watchMedia(node, viaRelay);
         return;
       }
     }
@@ -267,7 +287,7 @@ function advanceMedia(node) {
 
   // Last resort: pull it through the relay, which often has a better route to
   // Steam than the visitor does.
-  if (!node.dataset.proxied && routeViaRelay(node, node.dataset.originalSrc || node.currentSrc || node.src)) {
+  if (!node.dataset.relayTried && routeViaRelay(node, node.dataset.originalSrc || node.currentSrc || node.src)) {
     rescues += 1;
     return;
   }
@@ -275,8 +295,8 @@ function advanceMedia(node) {
   // If the relay could not serve it either, go back to the URL Steam gave us
   // and let the browser keep trying — a slow asset must never end up worse off
   // than if it had never been re-routed.
-  if (node.dataset.proxied === '1' && node.dataset.originalSrc) {
-    node.dataset.proxied = 'reverted';
+  if (node.dataset.relayTried && node.dataset.originalSrc && node.dataset.reverted !== '1') {
+    node.dataset.reverted = '1';
     setSource(node, node.dataset.originalSrc);
     return;
   }
@@ -290,20 +310,34 @@ function advanceMedia(node) {
 }
 
 /**
- * Give a URL its stall budget to produce something; after that, re-request it
- * through the relay.
+ * Give a URL its stall budget to produce something, then do something else.
  *
  * This is the part a plain `error` listener cannot do: a request that hangs
  * never fails, it just never finishes, so a timer is the only signal there is.
- * It is also why a blocked CDN used to leave a trailer spinning forever.
+ * It is why a blocked CDN used to leave a trailer spinning forever on a black
+ * frame with a list of working alternates sitting untouched beside it.
+ *
+ * The relay gets first refusal, because it usually has a route this network
+ * does not. Once it has been tried and failed, a stall instead moves to the
+ * next host — the point is that *every* dead end has a time limit, not just
+ * the ones polite enough to report an error.
  */
 function watchMedia(node, url) {
   clearTimeout(Number(node.dataset.slowTimer) || 0);
-  if (!mediaProxyBase || node.dataset.proxied || !isSteamAsset(url)) return;
+
+  const canRelay = Boolean(mediaProxyBase) && !node.dataset.relayTried && !node.dataset.proxied && isSteamAsset(url);
+  const canAdvance = Boolean(node.dataset.fallback) || (Boolean(mediaProxyBase) && !node.dataset.relayTried);
+  if (!canRelay && !canAdvance) return;
 
   const timer = setTimeout(() => {
     if (hasArrived(node)) return;
-    if (routeViaRelay(node, url)) rescues += 1;
+    if (canRelay && routeViaRelay(node, url)) {
+      rescues += 1;
+      // The relay can hang too; it does not get an unlimited turn either.
+      watchMedia(node, proxied(url) || url);
+      return;
+    }
+    advanceMedia(node);
   }, stallMs(node));
 
   node.dataset.slowTimer = String(timer);
@@ -381,7 +415,7 @@ export function attachMediaFallbacks(root = document) {
       // before this listener exists, so a failure may already have happened.
       advanceMedia(node);
     } else if (proxyFirst() && isSteamAsset(src)) {
-      routeViaRelay(node, src);
+      if (routeViaRelay(node, src)) watchMedia(node, proxied(src) || src);
     } else if (!hasArrived(node)) {
       watchWhenVisible(node, src);
     }
