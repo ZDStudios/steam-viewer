@@ -312,6 +312,15 @@ when it sits in the trailer's own directory) and probes them concurrently
 before use. A rebuilt address that does not answer never reaches the browser
 as a working source.
 
+Rebuilding still assumes Steam's *filenames*, and that assumption holds for
+most trailers and misses the rest — which is why a game can end up with one
+trailer playing and two dead. So when a payload names no addresses, the relay
+also reads the game's store page: that is the page Steam itself renders to
+play these, so whatever names are current appear in it verbatim, grouped by
+the trailer's own folder. Stated addresses go in front of the rebuilt ones
+rather than replacing them. One extra request, only for a game that needs it,
+cached with the rest of the page.
+
 Behind all of them sits **`GET /trailer/:appid`**, where the relay resolves the
 address itself and streams whichever source responds. Every other route depends
 on the browser holding a Steam URL that still works — `appdetails` hands out
