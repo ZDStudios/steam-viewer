@@ -17,12 +17,12 @@ import {
   skeletonGrid,
   skeletonPage,
   toast,
-} from './components.js?v=2026-08-05.1';
-import * as account from './account.js?v=2026-08-05.1';
-import { renderRichText } from './sanitize.js?v=2026-08-05.1';
-import * as wishlist from './wishlist.js?v=2026-08-05.1';
-import { pickCodec, ScreenPlayer } from './screen.js?v=2026-08-05.1';
-import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime, movieSources, proxied } from './util.js?v=2026-08-05.1';
+} from './components.js?v=2026-08-05.2';
+import * as account from './account.js?v=2026-08-05.2';
+import { renderRichText } from './sanitize.js?v=2026-08-05.2';
+import * as wishlist from './wishlist.js?v=2026-08-05.2';
+import { pickCodec, ScreenPlayer } from './screen.js?v=2026-08-05.2';
+import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime, movieSources, proxied, relayTrailer } from './util.js?v=2026-08-05.2';
 
 /** Card options every grid shares: hide ignored titles, mark wishlisted ones. */
 const cardOpts = (extra = {}) => ({ isWishlisted: (appid) => wishlist.has(appid), ...extra });
@@ -517,7 +517,7 @@ export async function appView(root, ctx, appid) {
 
   const media = [
     ...(game.movies || [])
-      .map((movie) => ({
+      .map((movie, index) => ({
         kind: 'video',
         thumb: movie.thumb,
         // A current relay has already probed these and put a responding host
@@ -525,7 +525,11 @@ export async function appView(root, ctx, appid) {
         // trailers still play against an older relay, and the player walks the
         // rest of the list on a stall as well as on an error — then falls
         // through to the relay, exactly as the images do.
-        sources: movieSources(movie),
+        // The relay's own copy goes last: it is the only source that does not
+        // depend on this browser holding a Steam address that still works.
+        // Six Steam addresses is already every host worth trying; more just
+        // adds stall time before the relay gets its turn.
+        sources: [...movieSources(movie).slice(0, 6), relayTrailer(game.appid, index)].filter(Boolean),
         poster: movie.thumb,
         label: movie.name || 'Trailer',
       }))
@@ -2179,10 +2183,12 @@ export async function diagnosticsView(root, ctx) {
           // failure without testing that would call a working page broken.
           let viaRelay = null;
           if (!anyDirect) {
-            const relayUrl = proxied(sources[0]);
             table.innerHTML = `${results.map(resultRow).join('')}<tr><td colspan="4">no CDN host answered — trying the relay…</td></tr>`;
+            // /trailer is where the game page ends up: the relay resolves the
+            // address itself, so it works even when every URL above is wrong.
+            const relayUrl = relayTrailer(appid, 0) || proxied(sources[0]);
             viaRelay = relayUrl
-              ? { ...(await probeMedia(relayUrl, 20_000)), note: 'through your relay' }
+              ? { ...(await probeMedia(relayUrl, 30_000)), note: 'served by your relay' }
               : { url: '—', ok: false, ms: 0, note: 'relay has no /media route, so there is no fallback' };
           }
 

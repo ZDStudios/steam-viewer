@@ -263,6 +263,103 @@ app.get('/media', mediaThrottle, async (req, res) => {
   }
 });
 
+/**
+ * `GET /trailer/:appid` — the relay resolves *and* serves a game's trailer.
+ *
+ * Every other route to a trailer depends on the browser holding a URL that
+ * still works: `appdetails` hands out addresses on CDN hosts Valve retired,
+ * the page guesses replacements, and if the guess is wrong — or the network
+ * cannot reach Steam's video CDN at all, or an extension blocks it, or the
+ * page is https and the address is http — there is nothing left to try.
+ *
+ * This removes the guessing. The browser asks for one stable URL on a server
+ * it is already talking to; the relay works out which source actually responds
+ * and streams it back. It is the last resort, not the first: a trailer that
+ * plays straight from Steam never comes through here, because this costs the
+ * relay's bandwidth.
+ */
+app.get('/trailer/:appid', mediaThrottle, async (req, res) => {
+  const id = Number(req.params.appid);
+  const index = Math.min(Math.max(Number(req.query.index) || 0, 0), 20);
+
+  if (!Number.isFinite(id) || id <= 0) {
+    res.status(400).json({ ok: false, error: { message: 'Invalid appid', status: 400 } });
+    return;
+  }
+
+  let movie;
+  try {
+    const { data } = await runAction('app', { appid: id });
+    movie = data?.game?.movies?.[index];
+  } catch (error) {
+    const status = error instanceof SteamError ? error.status : 502;
+    res.status(status).json({ ok: false, error: { message: error.message, status } });
+    return;
+  }
+
+  if (!movie) {
+    res.status(404).json({ ok: false, error: { message: `App ${id} has no trailer at index ${index}`, status: 404 } });
+    return;
+  }
+
+  // Ask for a byte from each candidate until one answers, then stream that one.
+  // The Range header is forwarded so the browser can still seek.
+  const tried = [];
+  for (const candidate of (movie.sources || []).slice(0, 8)) {
+    tried.push(candidate);
+    let upstream;
+    try {
+      upstream = await fetch(candidate, {
+        headers: {
+          'User-Agent': USER_AGENT,
+          Accept: '*/*',
+          ...(req.headers.range ? { Range: req.headers.range } : {}),
+        },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch {
+      continue;
+    }
+
+    const type = upstream.headers.get('content-type') || '';
+    if (!upstream.ok || !MEDIA_TYPES.test(type)) {
+      upstream.body?.cancel?.().catch(() => {});
+      continue;
+    }
+
+    res.status(upstream.status);
+    for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+      const value = upstream.headers.get(header);
+      if (value) res.setHeader(header, value);
+    }
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    // Which source won, so the diagnostics page can say so.
+    res.setHeader('X-Trailer-Source', candidate);
+
+    if (!upstream.body) {
+      res.end();
+      return;
+    }
+    try {
+      await pipeline(Readable.fromWeb(upstream.body), res);
+    } catch {
+      res.destroy();
+    }
+    return;
+  }
+
+  res.status(502).json({
+    ok: false,
+    error: {
+      message: `None of the ${tried.length} address(es) Steam gave for this trailer responded to the relay either.`,
+      status: 502,
+      tried,
+    },
+  });
+});
+
 /* Sign in through Steam — browser navigations, not actions (see openid.js). */
 mountSteamAuth(app);
 

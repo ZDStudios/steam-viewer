@@ -469,6 +469,20 @@ export function videoCandidates(url) {
   });
 }
 
+/**
+ * The relay's own copy of a trailer.
+ *
+ * Every other source depends on the browser holding a Steam URL that still
+ * works. This one does not: the relay looks the trailer up and streams
+ * whichever address actually responds, so it survives a retired CDN host, a
+ * stale address in `appdetails`, a blocked video CDN and an http address on an
+ * https page all at once. Last in the list, because it spends relay bandwidth.
+ */
+export function relayTrailer(appid, index = 0) {
+  if (!mediaProxyBase || !Number.isFinite(Number(appid))) return null;
+  return `${mediaProxyBase}/trailer/${Number(appid)}?index=${Number(index) || 0}`;
+}
+
 /** Expand a movie record from any relay version into an ordered source list. */
 export function movieSources(movie) {
   if (!movie) return [];

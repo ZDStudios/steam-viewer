@@ -1,6 +1,6 @@
 /** Reusable pieces of Steam-flavoured UI: cards, price blocks, media player,
  *  carousel, lightbox and toasts. */
-import { $, $$, attachImageFallbacks, attachMediaFallbacks, el, esc, escAttr, formatMoney, videoCandidates } from './util.js?v=2026-08-05.1';
+import { $, $$, attachImageFallbacks, attachMediaFallbacks, el, esc, escAttr, formatMoney, videoCandidates } from './util.js?v=2026-08-05.2';
 
 /* ------------------------------------------------------------------ *
  * Atoms
@@ -459,7 +459,7 @@ export function mountPlayer(root, media, { onZoom } = {}) {
       // never fires `error`, so a walker driven by `error` alone left the
       // player sitting on a black frame indefinitely, which is what a dead
       // trailer looked like.
-      const sources = (entry.sources || [entry.src]).filter(Boolean).slice(0, 10);
+      const sources = (entry.sources || [entry.src]).filter(Boolean).slice(0, 12);
       video.src = sources[0];
       video.dataset.fallback = sources.slice(1).join('|');
 
