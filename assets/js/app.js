@@ -1,8 +1,9 @@
 /** Boot, header wiring and the hash router. */
-import { normalizeBase, Relay } from './client.js?v=2026-07-31.4';
-import { toast } from './components.js?v=2026-07-31.4';
-import { $, $$, attachImageFallbacks, debounce, esc, escAttr, formatMoney, REGIONS, scrollToTop, setMediaProxy } from './util.js?v=2026-07-31.4';
-import * as wishlist from './wishlist.js?v=2026-07-31.4';
+import * as account from './account.js?v=2026-08-05.1';
+import { normalizeBase, Relay } from './client.js?v=2026-08-05.1';
+import { toast } from './components.js?v=2026-08-05.1';
+import { $, $$, attachImageFallbacks, debounce, esc, escAttr, formatMoney, REGIONS, scrollToTop, setMediaProxy } from './util.js?v=2026-08-05.1';
+import * as wishlist from './wishlist.js?v=2026-08-05.1';
 import {
   aboutView,
   appView,
@@ -17,7 +18,7 @@ import {
   usersView,
   watchView,
   wishlistView,
-} from './views.js?v=2026-07-31.4';
+} from './views.js?v=2026-08-05.1';
 
 const CONFIG = window.STEAM_VIEWER_CONFIG || {};
 const LS = {
@@ -463,10 +464,19 @@ window.addEventListener('hashchange', () => route());
  * Boot
  * ------------------------------------------------------------------ */
 
+/* A sign-in that has just come back from Steam lands here, before routing. */
+const signIn = account.consumeRedirect();
+if (signIn?.steamid) {
+  toast('Signed in through Steam', 'ok', 4000);
+  window.location.hash = `#/library/${signIn.steamid}`;
+} else if (signIn?.error) {
+  toast(signIn.error, 'error', 8000);
+}
+
 if (!window.location.hash) window.location.replace(`${window.location.pathname}${window.location.search}#/`);
 
 /** What this copy of the page is; shown in diagnostics and the footer. */
-export const CLIENT_BUILD = CONFIG.build || '2026-07-31.4';
+export const CLIENT_BUILD = CONFIG.build || '2026-08-05.1';
 window.STEAM_VIEWER_CLIENT_BUILD = CLIENT_BUILD;
 
 async function loadCapabilities() {

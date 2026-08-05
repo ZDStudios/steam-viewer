@@ -18,6 +18,7 @@ import { WebSocketServer } from 'ws';
 
 import { ACTIONS, BUILD, FEATURES, runAction } from './actions.js';
 import * as agents from './agents.js';
+import { mountSteamAuth } from './openid.js';
 import { cache, hasApiKey, internals, SteamError, USER_AGENT } from './steam.js';
 
 const PORT = Number(process.env.PORT) || 8080;
@@ -113,6 +114,7 @@ app.get('/', (req, res) => {
     <li><a href="/api/search?term=portal">/api/search?term=portal</a></li>
     <li><a href="/api/app?appid=620">/api/app?appid=620</a></li>
     <li><code>/media?url=&lt;steam asset&gt;</code> — asset proxy for slow CDNs</li>
+    <li><code>/auth/steam?return=&lt;your page&gt;</code> — sign in through Steam (OpenID)</li>
   </ul>
   <p>Build: <code>${BUILD}</code></p>
   <p>Steam API key: ${hasApiKey() ? 'set (richer profiles)' : 'not set (profiles still work via community XML)'}</p>
@@ -260,6 +262,9 @@ app.get('/media', mediaThrottle, async (req, res) => {
     res.destroy();
   }
 });
+
+/* Sign in through Steam — browser navigations, not actions (see openid.js). */
+mountSteamAuth(app);
 
 app.get('/api/:action', throttle, handleRest);
 app.post('/api/:action', throttle, handleRest);

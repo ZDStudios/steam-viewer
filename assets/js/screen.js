@@ -29,6 +29,8 @@ const CODECS = [
 const DRIFT_S = 0.15;
 const JUMP_AHEAD_S = 0.6;
 const CATCHUP_RATE = 1.06;
+/** Seconds of already-played video kept before it is reclaimed. */
+const KEEP_HISTORY_S = 2;
 
 /** The best codec this browser can actually decode, or null. */
 export function pickCodec() {
@@ -165,16 +167,26 @@ export class ScreenPlayer {
     this.#trim();
   }
 
-  /** Drop already-played video so the buffer cannot grow without bound. */
+  /**
+   * Drop already-played video so the buffer cannot grow without bound.
+   *
+   * `remove()` puts the source buffer into `updating`, which blocks the next
+   * `appendBuffer` until it finishes — so with one fragment per frame, evicting
+   * on every append would spend half the frame budget waiting on the eviction
+   * of the previous one. It only runs once there is a couple of seconds of
+   * history worth reclaiming.
+   */
   #evict() {
     if (!this.sourceBuffer || this.sourceBuffer.updating) return;
     const buffered = this.sourceBuffer.buffered;
     if (buffered.length === 0) return;
+
+    const start = buffered.start(0);
+    const cutoff = this.video.currentTime - KEEP_HISTORY_S;
+    if (cutoff - start < KEEP_HISTORY_S) return;
+
     try {
-      // Keep half a second of history — enough for the decoder, not enough to
-      // let the element sit in the past.
-      const cutoff = Math.max(buffered.start(0), this.video.currentTime - 0.5);
-      if (cutoff > buffered.start(0)) this.sourceBuffer.remove(buffered.start(0), cutoff);
+      this.sourceBuffer.remove(start, cutoff);
     } catch {
       /* nothing removable yet */
     }

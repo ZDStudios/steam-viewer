@@ -161,13 +161,14 @@ function genreStrategies(name) {
   const tag = TAG_IDS[key];
   const strategies = [];
 
-  if (tag) strategies.push({ key: 'tag', base: { tags: tag } });
-  // Free-to-play is a price, not a tag, and Steam does filter on it.
-  if (key === 'free to play') strategies.push({ key: 'price', base: { maxprice: 'free' } });
-  strategies.push({ key: 'genre', base: { genre: name } });
+  if (tag) strategies.push({ key: 'tag', base: { tags: tag }, verify: true });
+  // Free-to-play is a price, not a genre. Steam does enforce `maxprice`, and
+  // the result cannot be checked against the genres field, so it is trusted.
+  if (key === 'free to play') strategies.push({ key: 'price', base: { maxprice: 'free' }, verify: false });
+  strategies.push({ key: 'genre', base: { genre: name }, verify: true });
   // Last resort: a plain text search. Loose, but a page of roughly-right games
   // beats an error message.
-  strategies.push({ key: 'term', base: { term: name } });
+  strategies.push({ key: 'term', base: { term: name }, verify: true });
 
   return strategies;
 }
@@ -207,7 +208,7 @@ export async function getGenre({ genre, cc = 'us', l = 'english' } = {}) {
   // not. The headline row doubles as the probe, so nothing is wasted.
   let chosen = null;
   let headline = [];
-  let bestFallback = null;
+  const attempts = [];
 
   for (const strategy of genreStrategies(name)) {
     let items = [];
@@ -216,19 +217,25 @@ export async function getGenre({ genre, cc = 'us', l = 'english' } = {}) {
     } catch {
       continue;
     }
-    if (looksLikeGenre(items, name)) {
+    if (items.length === 0) continue;
+
+    if (strategy.verify === false || looksLikeGenre(items, name)) {
       chosen = strategy;
       headline = items;
       break;
     }
-    // Keep the best near-miss: for a genre Steam does not tag (a made-up one,
-    // or a tag id we do not know) a text search is still better than nothing.
-    if (!bestFallback && items.length) bestFallback = { strategy, items };
+    attempts.push({ strategy, items });
   }
 
-  if (!chosen && bestFallback) {
-    chosen = bestFallback.strategy;
-    headline = bestFallback.items;
+  if (!chosen && attempts.length) {
+    // Nothing could be verified — a genre Steam does not tag, or a tag id this
+    // relay does not know. A text search is at least *about* the word that was
+    // asked for, so it beats the unfiltered top sellers that an ignored filter
+    // hands back. Either way the page is told the listing is unverified rather
+    // than being allowed to present it as a real genre.
+    const best = attempts.find((attempt) => attempt.strategy.key === 'term') || attempts[0];
+    chosen = { ...best.strategy, key: 'unverified' };
+    headline = best.items;
   }
 
   if (!chosen) throw new SteamError(`Steam returned no titles for “${name}”`, { status: 404 });

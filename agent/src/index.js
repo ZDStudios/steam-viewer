@@ -445,8 +445,13 @@ async function handleOperation(message) {
       }
 
       case 'stream.start': {
-        if (!ALLOW_LAUNCH) {
-          reply(false, { message: 'This agent runs in read-only mode (--no-launch).', status: 403 });
+        // Watching the screen and starting a game are different permissions,
+        // and they have their own switches: `--stream=false` turns streaming
+        // off, `--no-launch` stops games being started. Gating streaming on
+        // --no-launch meant a read-only agent could not be watched at all,
+        // and anyone who wanted to watch had to allow remote launching too.
+        if (!STREAM_ENABLED) {
+          reply(false, { message: 'Screen streaming is switched off on this agent (--stream=false).', status: 403 });
           return;
         }
         try {

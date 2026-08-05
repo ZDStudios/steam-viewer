@@ -17,11 +17,12 @@ import {
   skeletonGrid,
   skeletonPage,
   toast,
-} from './components.js?v=2026-07-31.4';
-import { renderRichText } from './sanitize.js?v=2026-07-31.4';
-import * as wishlist from './wishlist.js?v=2026-07-31.4';
-import { pickCodec, ScreenPlayer } from './screen.js?v=2026-07-31.4';
-import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime, movieSources } from './util.js?v=2026-07-31.4';
+} from './components.js?v=2026-08-05.1';
+import * as account from './account.js?v=2026-08-05.1';
+import { renderRichText } from './sanitize.js?v=2026-08-05.1';
+import * as wishlist from './wishlist.js?v=2026-08-05.1';
+import { pickCodec, ScreenPlayer } from './screen.js?v=2026-08-05.1';
+import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime, movieSources } from './util.js?v=2026-08-05.1';
 
 /** Card options every grid shares: hide ignored titles, mark wishlisted ones. */
 const cardOpts = (extra = {}) => ({ isWishlisted: (appid) => wishlist.has(appid), ...extra });
@@ -334,7 +335,7 @@ export async function genreView(root, ctx, genre) {
     <h1 class="apphead__title" style="margin-bottom:6px">${esc(data.genre || name)}</h1>
     <p class="loading-note" style="text-align:left;margin:0 0 18px">
       ${
-        data.matchedBy === 'term'
+        data.matchedBy === 'term' || data.matchedBy === 'unverified'
           ? `Steam has no tag called “${esc(name)}”, so these are search matches rather than a tagged listing.`
           : `Tagged “${esc(data.genre || name)}” on the Steam store.`
       }
@@ -798,22 +799,80 @@ export async function appView(root, ctx, appid) {
 
 const LIBRARY_KEY = 'steam-viewer:last-profile';
 
+/**
+ * Shown on your own profile once you have signed in through Steam.
+ *
+ * It exists to answer a question people reasonably ask — "why can't I see my
+ * cart and my wallet?" — in the one place they would look for them, rather
+ * than leaving a gap that reads like a bug.
+ */
+function accountPanelHtml() {
+  return `<section class="panel account" style="margin-bottom:18px">
+    <div class="panel__head">
+      <h2>Your Steam account</h2>
+      <span>verified by Steam</span>
+    </div>
+    <div class="panel__body account__body">
+      <div>
+        <h3 class="account__h">Connected, so this page can show</h3>
+        <ul class="account__list account__list--yes">
+          ${account.LIMITS.available.map((line) => `<li>${esc(line)}</li>`).join('')}
+        </ul>
+        <p class="pstat">
+          <a class="btn btn--ghost btn--sm" href="#/wishlist">Your wishlist &amp; cart</a>
+          <a class="btn btn--ghost btn--sm" href="https://store.steampowered.com/cart/" target="_blank" rel="noopener noreferrer">Steam cart</a>
+          <a class="btn btn--ghost btn--sm" href="https://store.steampowered.com/account/" target="_blank" rel="noopener noreferrer">Steam wallet</a>
+        </p>
+      </div>
+      <div>
+        <h3 class="account__h">Not available to any site, including this one</h3>
+        <ul class="account__list account__list--no">
+          ${account.LIMITS.unavailable.map((entry) => `<li><strong>${esc(entry.what)}</strong> — ${esc(entry.why)}</li>`).join('')}
+        </ul>
+      </div>
+    </div>
+  </section>`;
+}
+
 export async function libraryView(root, ctx, who = '') {
   ctx.setTitle('Library · Steam Viewer');
 
   const requested = decodeURIComponent(who || '');
-  const remembered = requested || localStorage.getItem(LIBRARY_KEY) || '';
+  // A connected account is the default profile — that is the whole point of
+  // connecting one — but an explicit link still wins.
+  const remembered = requested || account.steamid() || localStorage.getItem(LIBRARY_KEY) || '';
+
+  const connected = account.get();
 
   const form = `
     <div class="empty">
       <h2>Look up a Steam library</h2>
-      <p>Enter a SteamID64, a custom profile name, or a full <code>steamcommunity.com</code> URL.</p>
+
+      <div class="signin">
+        ${
+          connected
+            ? `<p class="signin__who">Connected as <strong>${esc(connected.name || connected.steamid)}</strong></p>
+               <div class="stream__actions" style="justify-content:center">
+                 <a class="btn btn--green btn--sm" href="#/library/${escAttr(connected.steamid)}">Open my library</a>
+                 <button class="btn btn--ghost btn--sm" type="button" id="steam-signout">Disconnect</button>
+               </div>`
+            : `<button class="btn btn--green" type="button" id="steam-signin">
+                 <span class="signin__mark" aria-hidden="true">◈</span> Sign in through Steam
+               </button>
+               <p class="loading-note" style="margin-top:8px">
+                 Opens Steam's own sign-in page. You type your password on <strong>steamcommunity.com</strong> and
+                 nowhere else — this site is told your account number and nothing more.
+               </p>`
+        }
+      </div>
+
+      <p style="margin-top:22px">Or look someone up without signing in:</p>
       <form class="formrow" id="library-form">
         <input type="text" id="library-input" placeholder="76561197960287930 or gabelogannewell" value="${escAttr(remembered)}" />
-        <button class="btn btn--green" type="submit">Load library</button>
+        <button class="btn btn--ghost" type="submit">Load library</button>
       </form>
       <p class="loading-note">
-        No sign-in needed — public profiles are read straight from Steam Community.
+        Public profiles are read straight from Steam Community.
         Don't know the exact name? <a href="#/users">Search for a profile</a>.
       </p>
       <p class="loading-note">The profile's game details must be public for Steam to list them.</p>
@@ -830,6 +889,19 @@ export async function libraryView(root, ctx, who = '') {
   };
 
   $('#library-form', root)?.addEventListener('submit', submit);
+  $('#steam-signin', root)?.addEventListener('click', () => {
+    try {
+      account.beginSignIn(ctx.relay.baseUrl);
+    } catch (error) {
+      toast(error.message, 'error', 7000);
+    }
+  });
+  $('#steam-signout', root)?.addEventListener('click', () => {
+    account.clear();
+    localStorage.removeItem(LIBRARY_KEY);
+    toast('Steam account disconnected', 'ok');
+    libraryView(root, ctx);
+  });
 
   if (remembered) await loadLibrary(root, ctx, remembered);
 }
@@ -850,6 +922,11 @@ async function loadLibrary(root, ctx, who) {
   }
 
   const profile = data.profile || {};
+  // Viewing your own connected account unlocks nothing extra from Steam, but
+  // it does change what this page should tell you about — see `accountPanel`.
+  const isMe = account.isConnected() && String(data.steamid) === account.steamid();
+  if (isMe) account.decorate({ name: profile.name, avatar: profile.avatar });
+
   const totalMinutes = data.games.reduce((sum, game) => sum + (game.playtimeForever || 0), 0);
   const online = profile.playingName ? 'in-game' : /online|away|busy|snooze|looking/i.test(profile.onlineState || '') ? 'online' : 'offline';
 
@@ -899,6 +976,8 @@ async function loadLibrary(root, ctx, who) {
 
   root.innerHTML = `
     <div class="breadcrumbs"><a href="#/library">Profiles</a> &rsaquo; ${esc(profile.name || data.steamid)}</div>
+
+    ${isMe ? accountPanelHtml() : ''}
 
     <header class="phead">
       <img class="phead__avatar phead__avatar--${esc(online)}" src="${escAttr(profile.avatar || '')}"
@@ -1426,6 +1505,7 @@ export async function watchView(root, ctx, arg) {
         </div>
       </div>
       <video id="watch-video" class="theatre__video" playsinline muted autoplay></video>
+      <div id="watch-problem"></div>
       <p class="loading-note" style="text-align:left">
         Everything this page needs is in the address bar — the relay and the pairing code — so the link works in any
         browser, on any machine, with nothing set up first. Anyone who has it can watch, so treat it like a password.
@@ -1450,14 +1530,26 @@ export async function watchView(root, ctx, arg) {
     }
   });
 
+  // The page chrome stays up whatever happens: a shared link that cannot
+  // connect should say why on a page that still looks like the watch page,
+  // with the code visible, rather than replacing itself with a bare error.
+  const problem = $('#watch-problem', root);
   let session = null;
-  try {
-    session = await attachStream({ ctx, code, video, say, onEnded: () => say('the stream ended') });
-  } catch (error) {
-    root.innerHTML = errorHtml(error, { retryLabel: 'Try again' });
-    bindRetry(root, () => watchView(root, ctx, arg));
-    return;
-  }
+
+  const connect = async () => {
+    problem.innerHTML = '';
+    video.hidden = false;
+    try {
+      session = await attachStream({ ctx, code, video, say, onEnded: () => say('the stream ended') });
+    } catch (error) {
+      say('not connected');
+      video.hidden = true;
+      problem.innerHTML = errorHtml(error, { retryLabel: 'Try again' });
+      bindRetry(problem, connect);
+    }
+  };
+
+  await connect();
 
   return () => session?.stop();
 }
@@ -1897,6 +1989,10 @@ const EXPECTED_FEATURES = [
   'steamspy',
   'remote-play',
   'dedupe',
+  'media-proxy',
+  'agent-stream',
+  'genre-tags',
+  'steam-openid',
 ];
 
 /** Can the browser actually load this media URL? */
@@ -2113,8 +2209,11 @@ export function aboutView(root, ctx) {
         <li>Keep a <a href="#/wishlist">wishlist</a> in this browser — it needs no Steam sign-in and it tunes the
             “Recommended For You” rows on the home page.</li>
         <li>Look up <a href="#/library">any public Steam profile</a> and value its library, with no sign-in from you
-            or the profile's owner.</li>
-        <li>Pair your gaming PC under <a href="#/play">Remote Play</a> to list and launch your installed games.</li>
+            or the profile's owner — or <a href="#/library">connect your own account</a> through Steam so it opens
+            straight to yours.</li>
+        <li>Pair your gaming PC under <a href="#/play">Remote Play</a> to list and launch your installed games, and
+            watch the screen in the browser — including from a <a href="#/play">shareable link</a> that carries
+            everything it needs in the URL.</li>
         <li>Switch store region to see local pricing.</li>
       </ul>
 
@@ -2135,6 +2234,24 @@ export function aboutView(root, ctx) {
         libraries from <code>steamcommunity.com/id/&lt;name&gt;/?xml=1</code>. Nobody has to log in. If the relay
         happens to have a <code>STEAM_API_KEY</code>, it uses the Web API instead for richer data. A profile whose game
         details are set to private cannot be read either way — that is Steam's setting, not a limitation here.
+      </p>
+
+      <h2>Connecting your Steam account</h2>
+      <p>
+        <a href="#/library">Sign in through Steam</a> uses Valve's own OpenID provider. You are sent to
+        <strong>steamcommunity.com</strong>, you type your password there and nowhere else, and Steam sends you back
+        with a signed assertion that the relay re-checks with Steam directly. All this site ever learns is your
+        SteamID64 — the same public number that appears in your profile URL. There is no password to store and
+        “disconnecting” is literally forgetting a number.
+      </p>
+      <p>
+        That gets you your profile, level, library, playtime, achievements, friends and account value without typing an
+        ID. It does <em>not</em> get you your cart or your wallet balance, and it is worth saying why rather than
+        leaving a gap: both live behind an authenticated Steam <em>store session</em>, and Valve publishes no API for
+        either — not with a Web API key, not through OpenID, not to anyone. The only way any site could show them is by
+        capturing a real Steam login, which this project will not build and which you should never hand to a
+        third-party page. Your own cart and wallet are one click away on Steam, and the account panel links straight to
+        them. Signing in also does not override your privacy settings: a private library stays private here too.
       </p>
 
       <h2>Remote play, honestly</h2>
