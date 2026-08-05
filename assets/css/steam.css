@@ -1971,10 +1971,28 @@ a.chip:hover {
   overflow: hidden;
   background: #000;
 }
-.disco__hero img {
+.disco__hero img,
+.disco__hero video {
   width: 100%;
   aspect-ratio: 616 / 353;
   object-fit: cover;
+  display: block;
+}
+.disco__hero--video {
+  position: relative;
+}
+/* Marks the tile as a moving image rather than a still that failed to load. */
+.disco__playing {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 2px 7px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  border-radius: 2px;
+  color: #d7e5ee;
+  background: rgba(0, 0, 0, 0.65);
+  pointer-events: none;
 }
 .disco__shots {
   display: grid;

@@ -540,6 +540,12 @@ export async function appView(root, ctx, appid) {
   const screenshotUrls = (game.screenshots || []).map((shot) => shot.full);
   const firstScreenshotIndex = media.findIndex((entry) => entry.kind === 'image');
 
+  // "Steam lists trailers for this game and none of them reached us" is a
+  // completely different problem from "this game has no trailers", and both
+  // used to look like an empty strip. Say which one it is.
+  const videoCount = media.filter((entry) => entry.kind === 'video').length;
+  const droppedVideos = (game.movies || []).length - videoCount;
+
   const genreChips = (game.genres || [])
     .map((genre) => `<a class="chip" href="#/genre/${encodeURIComponent(genre)}">${esc(genre)}</a>`)
     .join('');
@@ -565,7 +571,20 @@ export async function appView(root, ctx, appid) {
     </header>
 
     <div class="applayout">
-      <div class="applayout__media">${playerHtml(media)}</div>
+      <div class="applayout__media">
+        ${playerHtml(media)}
+        ${
+          droppedVideos > 0
+            ? `<p class="loading-note" style="text-align:left">
+                 Steam lists ${formatNumber(game.movies.length)} trailer${game.movies.length === 1 ? '' : 's'} for this
+                 game but sent no playable address for ${droppedVideos === game.movies.length ? 'any of them' : `${formatNumber(droppedVideos)} of them`} —
+                 that is the relay's copy of the store page, not your connection.
+                 <a href="#/diagnostics">Run the media check</a> or
+                 <a href="${escAttr(game.storeUrl)}" target="_blank" rel="noopener noreferrer">watch on Steam</a>.
+               </p>`
+            : ''
+        }
+      </div>
 
       <div class="applayout__body">
         <div class="tabs" id="app-tabs" role="tablist">

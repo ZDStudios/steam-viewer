@@ -179,6 +179,13 @@ export function discoveryRowHtml(row, { wishlisted = false } = {}) {
   const shots = (item.screenshots || []).slice(0, 4);
   const hero = item.capsule || item.header;
 
+  // Someone who has asked not to see motion gets the still, as before.
+  const stillOnly =
+    typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const trailer = stillOnly
+    ? []
+    : [item.preview?.webm, item.preview?.mp4].filter(Boolean).flatMap(videoCandidates);
+
   return `<section class="disco" data-appid="${item.appid}">
     <header class="disco__head">
       <div>
@@ -194,8 +201,19 @@ export function discoveryRowHtml(row, { wishlisted = false } = {}) {
     </header>
 
     <div class="disco__body">
-      <a class="disco__hero" href="#/app/${item.appid}">
-        <img src="${escAttr(hero)}" data-fallback="${escAttr(imageChain(item, hero))}" alt="${escAttr(item.name)}" loading="lazy" decoding="async" />
+      <a class="disco__hero${trailer.length ? ' disco__hero--video' : ''}" href="#/app/${item.appid}">
+        ${
+          trailer.length
+            ? // Steam's own discovery queue plays the trailer here rather than
+              // showing a still, and the relay has been sending the clip all
+              // along — it was simply never rendered. Muted and looping, so it
+              // behaves like the store's tile and needs no interaction.
+              `<video src="${escAttr(trailer[0])}" data-fallback="${escAttr(trailer.slice(1).join('|'))}"
+                      poster="${escAttr(item.preview?.thumb || hero)}" muted loop playsinline autoplay
+                      preload="metadata" aria-label="${escAttr(`${item.name} trailer`)}"></video>
+               <span class="disco__playing">TRAILER</span>`
+            : `<img src="${escAttr(hero)}" data-fallback="${escAttr(imageChain(item, hero))}" alt="${escAttr(item.name)}" loading="lazy" decoding="async" />`
+        }
       </a>
       <div class="disco__shots">
         ${shots

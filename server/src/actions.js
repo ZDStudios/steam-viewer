@@ -238,7 +238,14 @@ export const ACTIONS = {
           const genre = seedCard?.genres?.[0];
           if (!seedCard || !genre) continue;
 
-          const { items } = await discover.browse({ filters: { genre, sort_by: discover.SORTS.topsellers }, cc, l, count: 12 });
+          // `{ genre }` is a filter Steam accepts and ignores, so this used to
+          // recommend the global top sellers no matter what was wishlisted.
+          const { items } = await discover.browse({
+            filters: { ...discover.genreFilter(genre), sort_by: discover.SORTS.topsellers },
+            cc,
+            l,
+            count: 12,
+          });
           const pick = items.find((item) => !used.has(item.appid));
           if (!pick) continue;
           used.add(pick.appid);

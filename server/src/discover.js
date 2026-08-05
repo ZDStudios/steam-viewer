@@ -150,6 +150,19 @@ const TAG_IDS = {
 const normalizeGenre = (name) => String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 /**
+ * The search filter that actually narrows results to a genre.
+ *
+ * Exported because the discovery rows need it too: they were passing
+ * `{ genre }` straight to the store search, which Steam accepts and ignores,
+ * so "Since you wishlisted X" was recommending the global top sellers rather
+ * than anything from X's genre.
+ */
+export function genreFilter(name) {
+  const tag = TAG_IDS[normalizeGenre(name)];
+  return tag ? { tags: tag } : { term: name };
+}
+
+/**
  * How the same genre can be asked for, best first.
  *
  * Each is tried until one comes back with results that genuinely belong to the
