@@ -134,15 +134,29 @@ function populateGenres(genres) {
 }
 populateGenres(FALLBACK_GENRES);
 
+const closeGenres = () => {
+  genreMenu.hidden = true;
+  genreToggle.setAttribute('aria-expanded', 'false');
+};
+
 genreToggle.addEventListener('click', () => {
   const open = genreMenu.hidden;
   genreMenu.hidden = !open;
   genreToggle.setAttribute('aria-expanded', String(open));
 });
 document.addEventListener('click', (event) => {
-  if (!genreDropdown.contains(event.target)) {
-    genreMenu.hidden = true;
-    genreToggle.setAttribute('aria-expanded', 'false');
+  if (!genreDropdown.contains(event.target)) closeGenres();
+});
+// Picking a genre has to close the menu: the click is inside the dropdown, so
+// the handler above deliberately leaves it open, and it would otherwise sit
+// over the page it just navigated to.
+genreMenu.addEventListener('click', (event) => {
+  if (event.target.closest('a')) closeGenres();
+});
+genreDropdown.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    closeGenres();
+    genreToggle.focus();
   }
 });
 

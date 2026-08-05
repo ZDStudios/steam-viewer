@@ -33,6 +33,7 @@
   --nav-h: 66px;
   --sub-h: 40px;
   --page: 1200px;
+  --hero-side: 324px;
 
   --font: "Motiva Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, Helvetica, sans-serif;
 }
@@ -617,7 +618,12 @@ a.chip:hover {
 
 .hero {
   position: relative;
-  margin-bottom: 34px;
+  /* Steam's featured capsule is 616×353 and there is no larger version of it.
+     The carousel is capped at that width plus the side column so the image is
+     shown at its own size: stretching a 616px asset across 1200px of page is
+     what made the hero look smeared and cropped. */
+  max-width: calc(616px + var(--hero-side));
+  margin: 0 auto 34px;
 }
 
 .hero__frame {
@@ -626,24 +632,41 @@ a.chip:hover {
   border-radius: var(--radius);
   overflow: hidden;
   box-shadow: 0 0 16px rgba(0, 0, 0, 0.55);
-  /* Steam's featured capsule is 616×353; scale with the viewport but never
-     let the image's aspect ratio stretch the panel into a wall. */
-  height: clamp(300px, 30vw, 372px);
 }
 
 .hero__media {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
-  height: 100%;
   background: #0b1218;
   overflow: hidden;
+  /* The capsule's own ratio drives the height, so nothing is ever cropped or
+     scaled unevenly. */
+  aspect-ratio: 616 / 353;
 }
 .hero__media img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* `contain` rather than `cover`: capsules for some titles are 460×215 or
+     292×136, and cropping those to fill would cut the artwork. */
+  object-fit: contain;
   animation: fadein 0.45s ease;
+}
+/* A blurred copy of the same art fills any letterbox left by `contain`, the
+   way Steam's own store does it. */
+.hero__media::before {
+  content: '';
+  position: absolute;
+  inset: -24px;
+  background-image: var(--hero-bg, none);
+  background-size: cover;
+  background-position: center;
+  filter: blur(24px) saturate(1.2) brightness(0.55);
+  z-index: 0;
+}
+.hero__media img {
+  position: relative;
+  z-index: 1;
 }
 @keyframes fadein {
   from {
@@ -655,7 +678,7 @@ a.chip:hover {
 }
 
 .hero__side {
-  flex: 0 0 324px;
+  flex: 0 0 var(--hero-side);
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -715,7 +738,8 @@ a.chip:hover {
   border-radius: 0 3px 3px 0;
 }
 .hero__arrow--next {
-  right: 340px;
+  /* Sits at the right edge of the artwork, not the panel beside it. */
+  right: var(--hero-side);
   border-radius: 3px 0 0 3px;
 }
 

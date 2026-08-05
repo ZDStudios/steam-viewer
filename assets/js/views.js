@@ -308,22 +308,46 @@ export async function genreView(root, ctx, genre) {
   ctx.setTitle(`${name} · Steam Viewer`);
   root.innerHTML = `<div class="breadcrumbs"><a href="#/">Store</a> &rsaquo; ${esc(name)}</div>${skeletonGrid(8)}`;
 
+  let data;
   try {
-    const data = await ctx.relay.request('genre', { genre: name, cc: ctx.region, l: ctx.language });
-    root.innerHTML = `
-      <div class="breadcrumbs"><a href="#/">Store</a> &rsaquo; ${esc(data.genre || name)}</div>
-      <h1 class="apphead__title" style="margin-bottom:18px">${esc(data.genre || name)}</h1>
-      ${(data.sections || [])
-        .map((section) => sectionHtml({ title: section.label, body: cardsHtml(visible(section.items || []), cardOpts()) }))
-        .join('') || '<div class="empty"><h2>No titles found</h2><p>Steam returned an empty genre listing.</p></div>'}`;
-    attachImageFallbacks(root);
-    attachHoverPreviews(root);
-    const all = (data.sections || []).flatMap((section) => section.items || []);
-    bindItemActions(root, (appid) => all.find((item) => item.appid === appid));
+    data = await ctx.relay.request('genre', { genre: name, cc: ctx.region, l: ctx.language });
   } catch (error) {
-    root.innerHTML = errorHtml(error);
-    bindRetry(root, () => genreView(root, ctx, genre));
+    // A relay too old to know about tag filtering answers 404 for genres it
+    // cannot resolve. Rather than leaving the Genres menu as a dead end, fall
+    // back to a plain store search for the genre name — which is what the
+    // relay's own last resort does anyway.
+    try {
+      const result = await ctx.relay.request('search', { term: name, cc: ctx.region, l: ctx.language, limit: 40 });
+      const items = result.items || [];
+      if (items.length === 0) throw error;
+      data = { genre: name, matchedBy: 'term', sections: [{ key: 'search', label: `Games matching “${name}”`, items }] };
+    } catch {
+      root.innerHTML = errorHtml(error);
+      bindRetry(root, () => genreView(root, ctx, genre));
+      return;
+    }
   }
+
+  const sections = data.sections || [];
+  root.innerHTML = `
+    <div class="breadcrumbs"><a href="#/">Store</a> &rsaquo; ${esc(data.genre || name)}</div>
+    <h1 class="apphead__title" style="margin-bottom:6px">${esc(data.genre || name)}</h1>
+    <p class="loading-note" style="text-align:left;margin:0 0 18px">
+      ${
+        data.matchedBy === 'term'
+          ? `Steam has no tag called “${esc(name)}”, so these are search matches rather than a tagged listing.`
+          : `Tagged “${esc(data.genre || name)}” on the Steam store.`
+      }
+    </p>
+    ${
+      sections
+        .map((section) => sectionHtml({ title: section.label, body: cardsHtml(visible(section.items || []), cardOpts()) }))
+        .join('') || '<div class="empty"><h2>No titles found</h2><p>Steam returned an empty genre listing.</p></div>'
+    }`;
+  attachImageFallbacks(root);
+  attachHoverPreviews(root);
+  const all = sections.flatMap((section) => section.items || []);
+  bindItemActions(root, (appid) => all.find((item) => item.appid === appid));
 }
 
 /* ================================================================== *

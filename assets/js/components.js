@@ -1,6 +1,6 @@
 /** Reusable pieces of Steam-flavoured UI: cards, price blocks, media player,
  *  carousel, lightbox and toasts. */
-import { $, $$, el, esc, escAttr, formatMoney } from './util.js?v=2026-07-31.4';
+import { $, $$, attachImageFallbacks, el, esc, escAttr, formatMoney } from './util.js?v=2026-07-31.4';
 
 /* ------------------------------------------------------------------ *
  * Atoms
@@ -272,12 +272,15 @@ const genreChips = (genres = []) =>
 
 export function heroHtml(items) {
   if (!items?.length) return '';
+  const first = items[0];
+  const art = first.capsule || first.header;
   return `<div class="hero" id="hero">
     <button class="hero__arrow hero__arrow--prev" type="button" aria-label="Previous">&#8249;</button>
     <button class="hero__arrow hero__arrow--next" type="button" aria-label="Next">&#8250;</button>
     <div class="hero__frame">
-      <a class="hero__media" id="hero-media" href="#/app/${items[0].appid}">
-        <img id="hero-img" src="${escAttr(items[0].capsule || items[0].header)}" alt="${escAttr(items[0].name)}" />
+      <a class="hero__media" id="hero-media" href="#/app/${first.appid}" style="--hero-bg:url(&quot;${escAttr(art)}&quot;)">
+        <img id="hero-img" src="${escAttr(art)}" data-fallback="${escAttr(imageChain(first, art))}"
+             alt="${escAttr(first.name)}" />
       </a>
       <div class="hero__side">
         <a class="hero__title" id="hero-title" href="#/app/${items[0].appid}">${esc(items[0].name)}</a>
@@ -314,10 +317,20 @@ export function mountHero(root, items, { intervalMs = 6500 } = {}) {
   const show = (next) => {
     index = (next + items.length) % items.length;
     const item = items[index];
+    const art = item.capsule || item.header;
     media.href = `#/app/${item.appid}`;
     title.href = `#/app/${item.appid}`;
-    img.src = item.capsule || item.header;
+
+    // Rebuild the fallback chain for the new slide, and let the shared image
+    // machinery re-bind so this one can fall back to the relay too.
+    img.dataset.fallback = imageChain(item, art);
+    delete img.dataset.fallbackBound;
+    delete img.dataset.proxied;
+    delete img.dataset.originalSrc;
+    img.src = art;
     img.alt = item.name;
+    media.style.setProperty('--hero-bg', `url("${art}")`);
+    attachImageFallbacks(hero);
     title.textContent = item.name;
     desc.textContent = item.shortDescription || '';
     tags.innerHTML = genreChips(item.genres);

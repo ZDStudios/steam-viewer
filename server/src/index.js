@@ -159,6 +159,7 @@ const MEDIA_HOSTS = [
   /(^|\.)akamaihd\.net$/i,
   /(^|\.)steampowered\.com$/i,
   /(^|\.)steamcommunity\.com$/i,
+  /(^|\.)steamusercontent\.com$/i,
   /(^|\.)valvesoftware\.com$/i,
 ];
 

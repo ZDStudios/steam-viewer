@@ -105,34 +105,151 @@ export const GENRES = [
   'Early Access',
 ];
 
+/**
+ * Steam's own store tag ids for the genres above.
+ *
+ * `?genre=Action` is not a filter the search backend enforces — it accepts the
+ * parameter, ignores it, and answers with the unfiltered top sellers. That is
+ * why every genre page showed the same games: the request looked successful.
+ * `?tags=<id>` is the filter the storefront itself uses and the only one that
+ * actually narrows the results.
+ */
+const TAG_IDS = {
+  action: 19,
+  adventure: 21,
+  casual: 597,
+  indie: 492,
+  'massively multiplayer': 128,
+  racing: 699,
+  rpg: 122,
+  'role-playing': 122,
+  simulation: 599,
+  sports: 701,
+  strategy: 9,
+  'free to play': 113,
+  'early access': 493,
+  puzzle: 1664,
+  horror: 1667,
+  shooter: 1774,
+  platformer: 1625,
+  survival: 1662,
+  roguelike: 1716,
+  'open world': 1695,
+  multiplayer: 3859,
+  'co-op': 1685,
+  anime: 4085,
+  'city builder': 7332,
+  'visual novel': 3799,
+  fighting: 1743,
+  metroidvania: 1628,
+  'point & click': 1698,
+  sandbox: 3810,
+  'turn-based': 1677,
+};
+
+const normalizeGenre = (name) => String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+/**
+ * How the same genre can be asked for, best first.
+ *
+ * Each is tried until one comes back with results that genuinely belong to the
+ * genre — see `looksLikeGenre` — so a filter Steam quietly drops cannot pass
+ * itself off as a working page.
+ */
+function genreStrategies(name) {
+  const key = normalizeGenre(name);
+  const tag = TAG_IDS[key];
+  const strategies = [];
+
+  if (tag) strategies.push({ key: 'tag', base: { tags: tag } });
+  // Free-to-play is a price, not a tag, and Steam does filter on it.
+  if (key === 'free to play') strategies.push({ key: 'price', base: { maxprice: 'free' } });
+  strategies.push({ key: 'genre', base: { genre: name } });
+  // Last resort: a plain text search. Loose, but a page of roughly-right games
+  // beats an error message.
+  strategies.push({ key: 'term', base: { term: name } });
+
+  return strategies;
+}
+
+/**
+ * Does this result set actually belong to the genre?
+ *
+ * Steam tags every store page with its genres, so the answer is in the data we
+ * already hydrated. A filter that was ignored returns the global top sellers,
+ * which overlap a requested genre by a few titles at most.
+ */
+function looksLikeGenre(items, name) {
+  if (items.length === 0) return false;
+  const wanted = normalizeGenre(name);
+  const hits = items.filter((item) =>
+    (item.genres || []).some((genre) => {
+      const found = normalizeGenre(genre);
+      return found === wanted || found.includes(wanted) || wanted.includes(found);
+    }),
+  ).length;
+  return hits / items.length >= 0.4;
+}
+
 /** Genre landing page: a few differently-sorted rows, like Steam's own. */
 export async function getGenre({ genre, cc = 'us', l = 'english' } = {}) {
   const name = String(genre || '').trim();
   if (!name) throw new SteamError('Missing genre', { status: 400 });
 
-  const base = name.toLowerCase() === 'free to play' ? { maxprice: 'free' } : { genre: name };
   const rows = [
-    { key: 'topsellers', label: 'Top Sellers', filters: { ...base, sort_by: SORTS.topsellers } },
-    { key: 'newreleases', label: 'New & Trending', filters: { ...base, sort_by: SORTS.released } },
-    { key: 'toprated', label: 'Top Rated', filters: { ...base, sort_by: SORTS.reviews } },
-    { key: 'specials', label: 'Specials', filters: { ...base, specials: 1, sort_by: SORTS.topsellers } },
+    { key: 'topsellers', label: 'Top Sellers', sort: SORTS.topsellers },
+    { key: 'newreleases', label: 'New & Trending', sort: SORTS.released },
+    { key: 'toprated', label: 'Top Rated', sort: SORTS.reviews },
+    { key: 'specials', label: 'Specials', sort: SORTS.topsellers, extra: { specials: 1 } },
   ];
 
-  const sections = [];
-  for (const row of rows) {
+  // Find a filter that works before spending four requests on one that does
+  // not. The headline row doubles as the probe, so nothing is wasted.
+  let chosen = null;
+  let headline = [];
+  let bestFallback = null;
+
+  for (const strategy of genreStrategies(name)) {
+    let items = [];
     try {
-      const { items } = await browse({ filters: row.filters, cc, l, count: 12 });
+      ({ items } = await browse({ filters: { ...strategy.base, sort_by: SORTS.topsellers }, cc, l, count: 12 }));
+    } catch {
+      continue;
+    }
+    if (looksLikeGenre(items, name)) {
+      chosen = strategy;
+      headline = items;
+      break;
+    }
+    // Keep the best near-miss: for a genre Steam does not tag (a made-up one,
+    // or a tag id we do not know) a text search is still better than nothing.
+    if (!bestFallback && items.length) bestFallback = { strategy, items };
+  }
+
+  if (!chosen && bestFallback) {
+    chosen = bestFallback.strategy;
+    headline = bestFallback.items;
+  }
+
+  if (!chosen) throw new SteamError(`Steam returned no titles for “${name}”`, { status: 404 });
+
+  const sections = [{ key: rows[0].key, label: rows[0].label, items: headline }];
+
+  for (const row of rows.slice(1)) {
+    try {
+      const { items } = await browse({
+        filters: { ...chosen.base, ...(row.extra || {}), sort_by: row.sort },
+        cc,
+        l,
+        count: 12,
+      });
       if (items.length) sections.push({ key: row.key, label: row.label, items });
     } catch {
       // One empty row should not take the whole page down.
     }
   }
 
-  if (sections.length === 0) {
-    throw new SteamError(`Steam returned no titles for “${name}”`, { status: 404 });
-  }
-
-  return { genre: name, sections };
+  return { genre: name, matchedBy: chosen.key, sections };
 }
 
 /** Developer / publisher landing page. */
