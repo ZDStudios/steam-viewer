@@ -22,7 +22,7 @@ import * as account from './account.js?v=2026-08-05.1';
 import { renderRichText } from './sanitize.js?v=2026-08-05.1';
 import * as wishlist from './wishlist.js?v=2026-08-05.1';
 import { pickCodec, ScreenPlayer } from './screen.js?v=2026-08-05.1';
-import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime, movieSources } from './util.js?v=2026-08-05.1';
+import { $, $$, attachImageFallbacks, esc, escAttr, formatDate, formatMoney, formatNumber, formatPlaytime, movieSources, proxied } from './util.js?v=2026-08-05.1';
 
 /** Card options every grid shares: hide ignored titles, mark wishlisted ones. */
 const cardOpts = (extra = {}) => ({ isWishlisted: (appid) => wishlist.has(appid), ...extra });
@@ -2151,8 +2151,11 @@ export async function diagnosticsView(root, ctx) {
             : !movie
               ? '<p class="loading-note" style="text-align:left">Steam returned no trailers for this app. Try 620 (Portal 2) or 730.</p>'
               : `<p class="loading-note" style="text-align:left">
-                   Relay sent ${movie.sources ? `${movie.sources.length} probed source(s)` : 'no probed sources (older relay)'};
-                   testing ${sources.length} candidate URL(s) in this browser.
+                   Steam lists ${formatNumber(game.movies.length)} trailer(s) for this app. The relay sent
+                   ${movie.sources ? `${formatNumber(movie.sources.length)} candidate source(s)` : 'no candidate list (older relay)'}${
+                     movie.verified === false ? ', none of which it could verify itself' : movie.verified ? ', one of which it verified' : ''
+                   }${movie.probeFailed ? ' (its own probe failed, so the list is unordered)' : ''}.
+                   Testing ${sources.length} of them in this browser, then the relay if none work.
                  </p>
                  <table class="diag" id="diag-media"><tbody><tr><td colspan="4">testing…</td></tr></tbody></table>`
         }
@@ -2166,16 +2169,36 @@ export async function diagnosticsView(root, ctx) {
     /* 3 + 4 — try every candidate, and the image hosts, all at once. One
        unreachable URL must not hold the whole report up. */
     const mediaDone = sources.length
-      ? Promise.all(sources.map((url) => probeMedia(url))).then((results) => {
-          const anyOk = results.some((result) => result.ok);
+      ? Promise.all(sources.map((url) => probeMedia(url))).then(async (results) => {
           const table = $('#diag-media tbody', out);
           if (!table) return;
+          const anyDirect = results.some((result) => result.ok);
+
+          // The game page does not give up when every CDN host fails — it
+          // re-requests the trailer through the relay. Reporting a flat
+          // failure without testing that would call a working page broken.
+          let viaRelay = null;
+          if (!anyDirect) {
+            const relayUrl = proxied(sources[0]);
+            table.innerHTML = `${results.map(resultRow).join('')}<tr><td colspan="4">no CDN host answered — trying the relay…</td></tr>`;
+            viaRelay = relayUrl
+              ? { ...(await probeMedia(relayUrl, 20_000)), note: 'through your relay' }
+              : { url: '—', ok: false, ms: 0, note: 'relay has no /media route, so there is no fallback' };
+          }
+
           table.innerHTML =
             results.map(resultRow).join('') +
+            (viaRelay && viaRelay.url !== '—' ? resultRow(viaRelay) : '') +
             `<tr><td colspan="4">${
-              anyOk
-                ? '<span class="is-ok">At least one source plays — trailers should work on the game page.</span>'
-                : '<span class="is-bad">No source played here. If the relay build above is current too, something between this browser and Steam\'s video CDN is blocking it — a network filter, DNS, a VPN or an extension.</span>'
+              anyDirect
+                ? '<span class="is-ok">At least one source plays directly — trailers should work on the game page.</span>'
+                : viaRelay?.ok
+                  ? '<span class="is-ok">No CDN host answered, but the relay served it — trailers will play, just routed through your relay.</span>'
+                  : `<span class="is-bad">Nothing played, directly or through the relay.${
+                      caps && missing.length
+                        ? ' Your relay is running older code than this page (see above) — deploy the latest commit first; that is the most likely cause.'
+                        : " Something between this browser and Steam's video CDN is blocking it — a network filter, DNS, a VPN or an extension."
+                    }</span>`
             }</td></tr>`;
         })
       : Promise.resolve();

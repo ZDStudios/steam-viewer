@@ -369,7 +369,15 @@ export async function resolveMovies(movies = [], { max = 3 } = {}) {
     return { ...movie, verified: false };
   });
 
-  return [...probed.filter(Boolean), ...movies.slice(max)];
+  // `mapPool` turns a thrown mapper into `null`, so filtering falsy entries out
+  // here would silently *delete the trailer* whenever probing it failed — a
+  // verification step removing the thing it was meant to verify. Probing is an
+  // optimisation: if it cannot run, the movie still goes out with its full
+  // candidate list and the browser walks it, which is what happens on a relay
+  // with no route to Steam's video CDN at all.
+  const kept = probed.map((entry, index) => entry || { ...movies[index], verified: false, probeFailed: true });
+
+  return [...kept, ...movies.slice(max)];
 }
 
 /** The full game page payload. */
