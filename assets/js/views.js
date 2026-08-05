@@ -522,8 +522,9 @@ export async function appView(root, ctx, appid) {
         thumb: movie.thumb,
         // A current relay has already probed these and put a responding host
         // first. movieSources() also expands the CDN host variants itself, so
-        // trailers still play against an older relay, and mountPlayer walks
-        // the rest of the list on error either way.
+        // trailers still play against an older relay, and the player walks the
+        // rest of the list on a stall as well as on an error — then falls
+        // through to the relay, exactly as the images do.
         sources: movieSources(movie),
         poster: movie.thumb,
         label: movie.name || 'Trailer',
@@ -683,6 +684,10 @@ export async function appView(root, ctx, appid) {
     const target = $(`[data-news="${CSS.escape(String(item.id))}"]`, root);
     if (target) renderRichText(target, item.contents);
   }
+  // Store descriptions embed their looping clips as <video> and their art as
+  // <img>; both arrive after the pass above, so they need binding here or the
+  // animations on the About tab have no fallback at all.
+  attachImageFallbacks(root);
 
   /* — tabs — */
   const tabs = $('#app-tabs', root);

@@ -369,10 +369,20 @@ h4 {
   position: relative;
 }
 .dropdown__menu {
-  position: absolute;
-  top: calc(100% + 4px);
+  /*
+   * Fixed, not absolute.
+   *
+   * `.storenav__links` scrolls horizontally on narrow screens, and a scroll
+   * container clips absolutely-positioned descendants — `overflow-x: auto`
+   * forces the other axis to `auto` too, so the menu opened *below* the strip
+   * and was cut away entirely. The button looked dead. Taking it out of the
+   * flow escapes the clip; `mountDropdown` places it under the toggle.
+   */
+  position: fixed;
+  top: 0;
   left: 0;
   min-width: 210px;
+  max-width: calc(100vw - 16px);
   padding: 6px;
   background: #1b2838;
   border: 1px solid #000;
@@ -380,7 +390,7 @@ h4 {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 2px;
-  z-index: 95;
+  z-index: 120;
 }
 .dropdown__menu a {
   padding: 6px 10px;

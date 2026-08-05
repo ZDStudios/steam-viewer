@@ -1,6 +1,6 @@
 /** Reusable pieces of Steam-flavoured UI: cards, price blocks, media player,
  *  carousel, lightbox and toasts. */
-import { $, $$, attachImageFallbacks, el, esc, escAttr, formatMoney } from './util.js?v=2026-08-05.1';
+import { $, $$, attachImageFallbacks, attachMediaFallbacks, el, esc, escAttr, formatMoney, videoCandidates } from './util.js?v=2026-08-05.1';
 
 /* ------------------------------------------------------------------ *
  * Atoms
@@ -130,13 +130,19 @@ export function attachHoverPreviews(root = document) {
       timer = setTimeout(() => {
         video = document.createElement('video');
         video.className = 'card__preview';
-        video.src = card.dataset.preview;
+        // Microtrailers live on the same shuffled CDN hosts as the full ones,
+        // so they get the same fallback chain rather than one shot at one host.
+        const candidates = videoCandidates(card.dataset.preview);
+        video.src = candidates[0];
+        video.dataset.fallback = candidates.slice(1).join('|');
         video.muted = true;
         video.loop = true;
         video.playsInline = true;
         video.preload = 'none';
-        video.addEventListener('error', stop);
+        // Only give up once every host and the relay have been tried.
+        video.addEventListener('media-exhausted', stop);
         $('.card__shot', card)?.appendChild(video);
+        attachMediaFallbacks(card);
         card.classList.add('is-previewing');
         video.play().catch(stop);
       }, 320);
@@ -422,35 +428,31 @@ export function mountPlayer(root, media, { onZoom } = {}) {
       // browser refuse every trailer.
 
       // Steam offers the same trailer at several bitrates, in two containers,
-      // across several CDN hosts. Walk the list until one plays; cap the
-      // attempts so a dead trailer cannot spin forever.
+      // across several CDN hosts. The shared media machinery walks them —
+      // the same code the images use, which matters because it moves on from a
+      // host that has *stalled* as well as one that has failed. A hung request
+      // never fires `error`, so a walker driven by `error` alone left the
+      // player sitting on a black frame indefinitely, which is what a dead
+      // trailer looked like.
       const sources = (entry.sources || [entry.src]).filter(Boolean).slice(0, 10);
-      const tried = [];
-      let attempt = 0;
+      video.src = sources[0];
+      video.dataset.fallback = sources.slice(1).join('|');
 
-      const tryNext = () => {
-        if (attempt >= sources.length) {
-          stage.replaceChildren(
-            el(`<div class="player__failed">
-                  <p>This trailer would not load.</p>
-                  <p><a href="${escAttr(sources[0] || '#')}" target="_blank" rel="noopener noreferrer">Open it directly</a>
-                     &middot; <a href="#/diagnostics">Run the media check</a></p>
-                  <details><summary>${tried.length} URL${tried.length === 1 ? '' : 's'} tried</summary>
-                    <ol>${tried.map((url) => `<li>${esc(url)}</li>`).join('')}</ol>
-                  </details>
-                </div>`),
-          );
-          return;
-        }
-        const next = sources[attempt++];
-        tried.push(next);
-        video.src = next;
-        video.load();
-      };
-      video.addEventListener('error', tryNext);
+      video.addEventListener('media-exhausted', () => {
+        stage.replaceChildren(
+          el(`<div class="player__failed">
+                <p>This trailer would not load — not from Steam's CDNs, and not through the relay.</p>
+                <p><a href="${escAttr(sources[0] || '#')}" target="_blank" rel="noopener noreferrer">Open it directly</a>
+                   &middot; <a href="#/diagnostics">Run the media check</a></p>
+                <details><summary>${sources.length} URL${sources.length === 1 ? '' : 's'} tried</summary>
+                  <ol>${sources.map((url) => `<li>${esc(url)}</li>`).join('')}</ol>
+                </details>
+              </div>`),
+        );
+      });
 
       stage.appendChild(video);
-      tryNext();
+      attachMediaFallbacks(stage);
       video.play().catch(() => {
         /* autoplay blocked — the controls are right there */
       });

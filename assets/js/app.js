@@ -136,17 +136,47 @@ function populateGenres(genres) {
 populateGenres(FALLBACK_GENRES);
 
 const closeGenres = () => {
+  if (genreMenu.hidden) return;
   genreMenu.hidden = true;
   genreToggle.setAttribute('aria-expanded', 'false');
 };
 
+/**
+ * Put the menu under its button.
+ *
+ * The menu is `position: fixed` because the nav strip it lives in scrolls
+ * horizontally, and a scroll container clips absolutely-positioned children —
+ * which is what made this button look like it did nothing at all. Fixed
+ * positioning escapes the clip but means the coordinates have to be worked out
+ * here, against the viewport.
+ */
+const placeGenres = () => {
+  const button = genreToggle.getBoundingClientRect();
+  genreMenu.style.top = `${Math.round(button.bottom + 4)}px`;
+  // Keep it on screen when the button is near the right-hand edge.
+  const width = genreMenu.offsetWidth || 210;
+  const left = Math.min(button.left, Math.max(8, window.innerWidth - width - 8));
+  genreMenu.style.left = `${Math.round(left)}px`;
+};
+
+const openGenres = () => {
+  genreMenu.hidden = false;
+  placeGenres();
+  genreToggle.setAttribute('aria-expanded', 'true');
+};
+
 genreToggle.addEventListener('click', () => {
-  const open = genreMenu.hidden;
-  genreMenu.hidden = !open;
-  genreToggle.setAttribute('aria-expanded', String(open));
+  if (genreMenu.hidden) openGenres();
+  else closeGenres();
 });
+
+// Anchored to the viewport, so anything that moves the button moves the menu.
+window.addEventListener('scroll', () => (genreMenu.hidden ? undefined : placeGenres()), { passive: true });
+window.addEventListener('resize', () => (genreMenu.hidden ? undefined : placeGenres()));
+$('.storenav__links')?.addEventListener('scroll', () => (genreMenu.hidden ? undefined : placeGenres()), { passive: true });
+
 document.addEventListener('click', (event) => {
-  if (!genreDropdown.contains(event.target)) closeGenres();
+  if (!genreDropdown.contains(event.target) && !genreMenu.contains(event.target)) closeGenres();
 });
 // Picking a genre has to close the menu: the click is inside the dropdown, so
 // the handler above deliberately leaves it open, and it would otherwise sit

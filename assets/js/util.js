@@ -154,6 +154,15 @@ export function proxied(url) {
 /** How long an image may take before we give up on Steam's CDN. */
 export const SLOW_IMAGE_MS = 3000;
 
+/**
+ * The same for video, but longer.
+ *
+ * A trailer legitimately takes longer to produce its first frame than a JPEG
+ * takes to decode, and giving up too early would restart a download that was
+ * about to work.
+ */
+export const SLOW_VIDEO_MS = 7000;
+
 /** Hosts Steam serves store and community art from. */
 const STEAM_ASSET_HOST =
   /(^|\.)(steamstatic\.com|steamcommunity\.com|steampowered\.com|steamusercontent\.com|akamaihd\.net|valvesoftware\.com)$/i;
@@ -166,15 +175,30 @@ function isSteamAsset(url) {
   }
 }
 
+/*
+ * Images and video have exactly the same problem — Steam's CDN is fast from
+ * some networks, glacial from others and blocked outright on a few — so they
+ * get exactly the same treatment. Only three things differ between the two
+ * element types, so those are looked up rather than duplicated.
+ */
+const IS_VIDEO = (node) => node.tagName === 'VIDEO';
+/** Has this element actually produced something? */
+const hasArrived = (node) => (IS_VIDEO(node) ? node.readyState >= 1 : node.complete && node.naturalWidth > 0);
+/** The event that says so. */
+const arrivalEvent = (node) => (IS_VIDEO(node) ? 'loadedmetadata' : 'load');
+const stallMs = (node) => (IS_VIDEO(node) ? SLOW_VIDEO_MS : SLOW_IMAGE_MS);
+
 /**
- * How many images the relay has had to rescue.
+ * How many assets the relay has had to rescue.
  *
  * On a network where Steam's CDN is simply unreachable — some ISPs, some
- * countries, a lot of school and office networks — *every* image costs a
+ * countries, a lot of school and office networks — *every* asset costs a
  * three-second wait before it is retried. After a few rescues we stop
- * pretending the CDN might work and route new images through the relay
+ * pretending the CDN might work and route new ones through the relay
  * immediately, which turns a page that trickles in over a minute into one that
- * loads at once.
+ * loads at once. Images and video share the counter deliberately: a network
+ * that cannot reach Steam's image hosts cannot reach its video hosts either,
+ * and a trailer should not have to rediscover that on its own.
  */
 let rescues = 0;
 const RESCUES_BEFORE_PROXY_FIRST = 4;
@@ -186,82 +210,108 @@ export function resetProxyLearning() {
   rescues = 0;
 }
 
-/** Send this image through the relay, remembering where it came from. */
-function routeViaRelay(img, url) {
+/**
+ * Point an element at a URL.
+ *
+ * A `<video>` needs `load()` to pick up a new `src`, and it must not lose its
+ * place in the world: one that was playing carries on playing, so switching
+ * CDN host mid-trailer is invisible rather than a stop.
+ */
+function setSource(node, url) {
+  if (!IS_VIDEO(node)) {
+    node.src = url;
+    return;
+  }
+  const wasPlaying = !node.paused && !node.ended;
+  node.src = url;
+  node.load();
+  if (wasPlaying) {
+    node.play().catch(() => {
+      /* autoplay rules — the controls are right there */
+    });
+  }
+}
+
+/** Send this asset through the relay, remembering where it came from. */
+function routeViaRelay(node, url) {
   const viaRelay = proxied(url);
   if (!viaRelay) return false;
-  if (!img.dataset.originalSrc) img.dataset.originalSrc = url;
-  img.dataset.proxied = '1';
-  img.src = viaRelay;
+  if (!node.dataset.originalSrc) node.dataset.originalSrc = url;
+  node.dataset.proxied = '1';
+  setSource(node, viaRelay);
   return true;
 }
 
-/** Move an image on to the next candidate URL in its fallback chain. */
-function advanceImage(img) {
-  const remaining = (img.dataset.fallback || '').split('|').filter(Boolean);
+/** Move an element on to the next candidate URL in its fallback chain. */
+function advanceMedia(node) {
+  const remaining = (node.dataset.fallback || '').split('|').filter(Boolean);
   const candidate = remaining.shift();
-  img.dataset.fallback = remaining.join('|');
+  node.dataset.fallback = remaining.join('|');
 
   if (candidate) {
-    // Once the CDN has proved unreachable, do not spend another three seconds
+    // Once the CDN has proved unreachable, do not spend another few seconds
     // finding that out again for every alternate host.
     if (proxyFirst() && isSteamAsset(candidate)) {
       const viaRelay = proxied(candidate);
       if (viaRelay) {
-        img.dataset.originalSrc = candidate;
-        img.dataset.proxied = '1';
-        img.src = viaRelay;
+        node.dataset.originalSrc = candidate;
+        node.dataset.proxied = '1';
+        setSource(node, viaRelay);
         return;
       }
     }
-    watchImage(img, candidate);
-    img.src = candidate;
+    watchMedia(node, candidate);
+    setSource(node, candidate);
     return;
   }
 
   // Last resort: pull it through the relay, which often has a better route to
   // Steam than the visitor does.
-  if (!img.dataset.proxied && routeViaRelay(img, img.dataset.originalSrc || img.currentSrc || img.src)) {
+  if (!node.dataset.proxied && routeViaRelay(node, node.dataset.originalSrc || node.currentSrc || node.src)) {
     rescues += 1;
     return;
   }
 
   // If the relay could not serve it either, go back to the URL Steam gave us
-  // and let the browser keep trying — a slow image must never end up worse
-  // off than if it had never been re-routed.
-  if (img.dataset.proxied === '1' && img.dataset.originalSrc) {
-    img.dataset.proxied = 'reverted';
-    img.src = img.dataset.originalSrc;
+  // and let the browser keep trying — a slow asset must never end up worse off
+  // than if it had never been re-routed.
+  if (node.dataset.proxied === '1' && node.dataset.originalSrc) {
+    node.dataset.proxied = 'reverted';
+    setSource(node, node.dataset.originalSrc);
     return;
   }
 
-  img.removeAttribute('src');
-  img.classList.add('is-missing');
-  img.parentElement?.classList.add('has-missing-image');
+  // Every host and the relay have all been tried. Say so out loud so a caller
+  // that can offer something better than a blank box gets the chance.
+  node.dispatchEvent(new CustomEvent('media-exhausted', { bubbles: false }));
+  node.removeAttribute('src');
+  node.classList.add('is-missing');
+  node.parentElement?.classList.add('has-missing-image');
 }
 
 /**
- * Give a URL `SLOW_IMAGE_MS` to produce pixels; after that, re-request it
- * through the relay. Steam's CDNs are quick from some networks and unusable
- * from others, and a stalled request never fires `error`, so a timer is the
- * only signal there is.
+ * Give a URL its stall budget to produce something; after that, re-request it
+ * through the relay.
+ *
+ * This is the part a plain `error` listener cannot do: a request that hangs
+ * never fails, it just never finishes, so a timer is the only signal there is.
+ * It is also why a blocked CDN used to leave a trailer spinning forever.
  */
-function watchImage(img, url) {
-  clearTimeout(Number(img.dataset.slowTimer) || 0);
-  if (!mediaProxyBase || img.dataset.proxied || !isSteamAsset(url)) return;
+function watchMedia(node, url) {
+  clearTimeout(Number(node.dataset.slowTimer) || 0);
+  if (!mediaProxyBase || node.dataset.proxied || !isSteamAsset(url)) return;
 
   const timer = setTimeout(() => {
-    if (img.complete && img.naturalWidth > 0) return;
-    if (routeViaRelay(img, url)) rescues += 1;
-  }, SLOW_IMAGE_MS);
+    if (hasArrived(node)) return;
+    if (routeViaRelay(node, url)) rescues += 1;
+  }, stallMs(node));
 
-  img.dataset.slowTimer = String(timer);
-  img.addEventListener('load', () => clearTimeout(timer), { once: true });
+  node.dataset.slowTimer = String(timer);
+  node.addEventListener(arrivalEvent(node), () => clearTimeout(timer), { once: true });
 }
 
 /**
- * Start the slow-image clock only once the browser has actually begun
- * fetching.
+ * Start the stall clock only once the browser has actually begun fetching.
  *
  * Cards are lazy-loaded, so an image far below the fold has not been requested
  * at all — starting its timer at render time would route the whole page
@@ -279,7 +329,7 @@ const viewportWatcher =
             viewportWatcher.unobserve(entry.target);
             const url = pendingWatch.get(entry.target);
             pendingWatch.delete(entry.target);
-            if (url && !entry.target.complete) watchImage(entry.target, url);
+            if (url && !hasArrived(entry.target)) watchMedia(entry.target, url);
           }
         },
         // Match the browser's own lazy-loading margin closely enough that the
@@ -287,17 +337,17 @@ const viewportWatcher =
         { rootMargin: '200px' },
       );
 
-function watchWhenVisible(img, url) {
-  if (!viewportWatcher || img.loading !== 'lazy') {
-    watchImage(img, url);
+function watchWhenVisible(node, url) {
+  if (!viewportWatcher || node.loading !== 'lazy') {
+    watchMedia(node, url);
     return;
   }
-  pendingWatch.set(img, url);
-  viewportWatcher.observe(img);
+  pendingWatch.set(node, url);
+  viewportWatcher.observe(node);
 }
 
 /**
- * Keep every Steam image on the page working.
+ * Keep every Steam image *and* every Steam video on the page working.
  *
  * Three things can go wrong and each has a different answer:
  *   • the asset moved between CDN hosts — walk `data-fallback`;
@@ -305,37 +355,41 @@ function watchWhenVisible(img, url) {
  *   • the CDN is slow or blocked from this network — the relay, on a timer,
  *     because a stalled request never reports an error.
  *
- * Images without a fallback chain (avatars, screenshots, community art) get
+ * Assets without a fallback chain (avatars, screenshots, community art) get
  * the relay treatment too: they are the ones with no alternate host to try, so
  * the relay is their only route.
  */
-export function attachImageFallbacks(root = document) {
-  for (const img of $$('img', root)) {
-    if (img.dataset.fallbackBound) continue;
+export function attachMediaFallbacks(root = document) {
+  for (const node of $$('img, video', root)) {
+    if (node.dataset.fallbackBound) continue;
 
-    const src = img.getAttribute('src');
-    const chained = img.hasAttribute('data-fallback');
+    const src = node.getAttribute('src');
+    const chained = node.hasAttribute('data-fallback');
     // Anything not from Steam and without a chain is somebody else's problem.
+    // A <video> with no src at all is a MediaSource player — leave it alone.
     if (!chained && !(src && isSteamAsset(src))) continue;
 
-    img.dataset.fallbackBound = '1';
-    if (src) img.dataset.originalSrc = src;
+    node.dataset.fallbackBound = '1';
+    if (src) node.dataset.originalSrc = src;
 
-    img.addEventListener('error', () => advanceImage(img));
+    node.addEventListener('error', () => advanceMedia(node));
 
     if (!src) {
-      advanceImage(img);
-    } else if (img.complete && img.naturalWidth === 0) {
+      advanceMedia(node);
+    } else if (!IS_VIDEO(node) && node.complete && node.naturalWidth === 0) {
       // The browser starts loading as soon as innerHTML is assigned, which is
       // before this listener exists, so a failure may already have happened.
-      advanceImage(img);
+      advanceMedia(node);
     } else if (proxyFirst() && isSteamAsset(src)) {
-      routeViaRelay(img, src);
-    } else if (!img.complete) {
-      watchWhenVisible(img, src);
+      routeViaRelay(node, src);
+    } else if (!hasArrived(node)) {
+      watchWhenVisible(node, src);
     }
   }
 }
+
+/** Kept as the name every view already calls; video is covered too now. */
+export const attachImageFallbacks = attachMediaFallbacks;
 
 /**
  * Steam has shuffled its trailer CDN between Akamai, Cloudflare and Fastly,
@@ -384,13 +438,12 @@ export function movieSources(movie) {
   const legacy = [movie.mp4, movie.mp4Low, movie.webm, movie.webmLow].filter(Boolean);
 
   const expanded = [...provided, ...legacy].flatMap(videoCandidates);
-  const direct = expanded.filter((url, index, all) => url && all.indexOf(url) === index);
 
-  // If every CDN host is unreachable from here, the relay usually still has a
-  // route to Steam — so it is appended as the final source rather than the
-  // player giving up.
-  const viaRelay = direct.slice(0, 2).map(proxied).filter(Boolean);
-  return [...direct, ...viaRelay];
+  // No relay URLs appended here any more: `attachMediaFallbacks` walks this
+  // list and falls through to the relay itself once it runs out, on a stall as
+  // well as on an error, which is the case a hand-appended source could never
+  // cover — a hung request never fails, so the player just spun forever.
+  return expanded.filter((url, index, all) => url && all.indexOf(url) === index);
 }
 
 export function scrollToTop() {
