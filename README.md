@@ -302,6 +302,16 @@ sits on a black frame forever with a list of working alternates untouched
 beside it. Every dead end has a time limit now, not just the ones polite enough
 to fail.
 
+Before any of that can matter, the addresses have to exist. Steam's store API
+regularly returns a movie with a working thumbnail, an id and a name and **no
+`mp4` or `webm` keys at all** — nothing to play, and indistinguishable from a
+game with no trailers. The files are still on the CDN; only the pointers are
+missing from that payload. Trailers live at a predictable path, so the relay
+rebuilds the addresses from the movie id (taking the folder from the thumbnail
+when it sits in the trailer's own directory) and probes them concurrently
+before use. A rebuilt address that does not answer never reaches the browser
+as a working source.
+
 Behind all of them sits **`GET /trailer/:appid`**, where the relay resolves the
 address itself and streams whichever source responds. Every other route depends
 on the browser holding a Steam URL that still works — `appdetails` hands out
