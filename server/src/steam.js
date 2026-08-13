@@ -470,9 +470,14 @@ export async function resolveMovies(movies = [], { max = 3 } = {}) {
   // optimisation: if it cannot run, the movie still goes out with its full
   // candidate list and the browser walks it, which is what happens on a relay
   // with no route to Steam's video CDN at all.
-  const kept = probed.map((entry, index) => entry || { ...movies[index], verified: false, probeFailed: true });
+  const kept = probed.map((entry, index) =>
+    entry ? { ...entry, probed: true } : { ...movies[index], verified: false, probed: true, probeFailed: true },
+  );
 
-  return [...kept, ...movies.slice(max)];
+  // Trailers past the probe budget are unverified rather than un-annotated:
+  // the page and the diagnostics both read this field, and "absent" is not the
+  // same answer as "not checked".
+  return [...kept, ...movies.slice(max).map((movie) => ({ ...movie, verified: false, probed: false }))];
 }
 
 /** The full game page payload. */

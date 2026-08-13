@@ -98,6 +98,20 @@ on a hash-routed page leaves you scrolled sideways with no obvious way back.
 
 ---
 
+## Tests
+
+```bash
+cd server && npm test
+```
+
+Covers the two things that have been hardest to get right: trailer resolution
+(addresses missing from the payload, rebuilt names that miss, probing that must
+never delete the trailer it is probing) and the media proxy (a CDN error page
+wearing an image content-type, an asset that moved hosts, failures that must
+not be cached). Nothing touches the network — every case replaces `fetch` with
+canned responses, so a run does not depend on Steam being reachable or on which
+game happens to have a trailer today.
+
 ## Running it locally
 
 ```bash
