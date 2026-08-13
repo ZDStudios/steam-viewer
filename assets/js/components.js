@@ -496,12 +496,20 @@ export function mountPlayer(root, media, { onZoom } = {}) {
       });
     } else {
       const img = document.createElement('img');
-      img.src = entry.src;
+      // The same treatment the trailer beside it gets. This branch was the one
+      // place a Steam image was created without it: the strip thumbnails come
+      // from markup the view binds, but the full-size shot is built here, so a
+      // screenshot on a host that has moved had no alternate to try, no relay
+      // to fall back to and no stall timer — it simply never appeared.
+      const candidates = imageCandidates(entry.src);
+      img.src = candidates[0];
+      img.dataset.fallback = candidates.slice(1).join('|');
       img.alt = entry.label || 'Screenshot';
       img.loading = 'eager';
       img.decoding = 'async';
       img.referrerPolicy = 'no-referrer';
       stage.appendChild(img);
+      attachMediaFallbacks(stage);
 
       if (onZoom) {
         const zoom = el('<button class="player__zoom" type="button">⤢ Enlarge</button>');
@@ -538,7 +546,21 @@ export const lightbox = (() => {
   const draw = () => {
     if (!images.length) return;
     index = (index + images.length) % images.length;
-    img.src = images[index];
+
+    // Rebind on every slide: the fallback machinery consumes the chain as it
+    // walks it, so a previously-shown image would leave the next one with an
+    // empty one and no way back.
+    const candidates = imageCandidates(images[index]);
+    delete img.dataset.fallbackBound;
+    delete img.dataset.proxied;
+    delete img.dataset.relayTried;
+    delete img.dataset.reverted;
+    delete img.dataset.originalSrc;
+    img.classList.remove('is-missing');
+    img.dataset.fallback = candidates.slice(1).join('|');
+    img.src = candidates[0];
+    attachMediaFallbacks(root);
+
     counter.textContent = `${index + 1} / ${images.length}`;
   };
 
