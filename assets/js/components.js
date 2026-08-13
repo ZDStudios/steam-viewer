@@ -1,6 +1,6 @@
 /** Reusable pieces of Steam-flavoured UI: cards, price blocks, media player,
  *  carousel, lightbox and toasts. */
-import { $, $$, attachImageFallbacks, attachMediaFallbacks, el, esc, escAttr, formatMoney, imageCandidates, resolvePoster, videoCandidates } from './util.js?v=2026-08-05.4';
+import { $, $$, attachImageFallbacks, attachMediaFallbacks, el, esc, escAttr, formatMoney, imageCandidates, resolvePoster, videoCandidates } from './util.js?v=2026-08-05.5';
 
 /* ------------------------------------------------------------------ *
  * Atoms

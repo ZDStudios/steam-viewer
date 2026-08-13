@@ -203,6 +203,57 @@ function mediaThrottle(req, res, next) {
   return next();
 }
 
+/**
+ * Steam's image hosts, for retrying a path that 404s on the one it was asked
+ * for. Valve moves art between these and leaves the old address in payloads
+ * that are still being served, so "not on this host" is routinely not the same
+ * as "gone".
+ */
+const MEDIA_HOST_ALTERNATES = [
+  'shared.cloudflare.steamstatic.com',
+  'shared.fastly.steamstatic.com',
+  'cdn.cloudflare.steamstatic.com',
+  'cdn.fastly.steamstatic.com',
+  'cdn.akamai.steamstatic.com',
+  'community.cloudflare.steamstatic.com',
+  'avatars.cloudflare.steamstatic.com',
+];
+
+function mediaAlternates(target) {
+  let url;
+  try {
+    url = new URL(target);
+  } catch {
+    return [target];
+  }
+  // Only store art moves between these; a community screenshot or a video
+  // lives where it lives, and rewriting its host would just waste requests.
+  if (!/\.steamstatic\.com$/i.test(url.hostname)) return [target];
+
+  const others = MEDIA_HOST_ALTERNATES.filter((host) => host !== url.hostname);
+  return [
+    target,
+    ...others.map((host) => {
+      const candidate = new URL(target);
+      candidate.host = host;
+      return candidate.toString();
+    }),
+  ];
+}
+
+async function fetchMedia(target, range) {
+  return fetch(target, {
+    headers: {
+      'User-Agent': USER_AGENT,
+      Accept: '*/*',
+      // Forwarded so the browser can still seek within a video.
+      ...(range ? { Range: range } : {}),
+    },
+    redirect: 'follow',
+    signal: AbortSignal.timeout(30_000),
+  });
+}
+
 app.get('/media', mediaThrottle, async (req, res) => {
   const target = allowedMediaUrl(req.query.url);
   if (!target) {
@@ -210,33 +261,59 @@ app.get('/media', mediaThrottle, async (req, res) => {
     return;
   }
 
-  let upstream;
-  try {
-    upstream = await fetch(target, {
-      headers: {
-        'User-Agent': USER_AGENT,
-        Accept: '*/*',
-        // Forwarded so the browser can still seek within a video.
-        ...(req.headers.range ? { Range: req.headers.range } : {}),
-      },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(30_000),
-    });
-  } catch (error) {
-    res.status(504).json({ ok: false, error: { message: `Upstream fetch failed: ${error.message}`, status: 504 } });
-    return;
+  // The page reaches for this route precisely when Steam's CDN has already let
+  // it down, so answering "the host you named 404s" would be no help at all.
+  // Store art moves between hosts; try the others before giving up.
+  const candidates = mediaAlternates(target).slice(0, 5);
+  let upstream = null;
+  let lastStatus = 0;
+  let lastError = '';
+
+  for (const candidate of candidates) {
+    let response;
+    try {
+      response = await fetchMedia(candidate, req.headers.range);
+    } catch (error) {
+      lastError = error.message;
+      continue;
+    }
+
+    const type = response.headers.get('content-type') || '';
+    // `ok` matters as much as the type: a CDN error page can be served with an
+    // image content-type, and streaming that as the asset — with a day of
+    // immutable caching on it, as this route used to — bakes the failure into
+    // the browser's cache where no amount of retrying can reach it.
+    if (response.ok && MEDIA_TYPES.test(type)) {
+      upstream = response;
+      break;
+    }
+
+    lastStatus = response.status;
+    response.body?.cancel?.().catch(() => {});
   }
 
-  const type = upstream.headers.get('content-type') || '';
-  if (!MEDIA_TYPES.test(type)) {
-    upstream.body?.cancel?.().catch(() => {});
-    res.status(415).json({ ok: false, error: { message: 'Upstream did not return media', status: 415 } });
+  if (!upstream) {
+    // Never cached: the next request should get a fresh answer, because the
+    // usual reason for this is transient.
+    res.setHeader('Cache-Control', 'no-store');
+    const status = lastStatus === 404 ? 404 : 502;
+    res.status(status).json({
+      ok: false,
+      error: {
+        message: lastStatus
+          ? `Steam answered ${lastStatus} for that asset on ${candidates.length} host(s)`
+          : `Could not reach Steam for that asset: ${lastError || 'no response'}`,
+        status,
+        tried: candidates,
+      },
+    });
     return;
   }
 
   const length = Number(upstream.headers.get('content-length'));
   if (Number.isFinite(length) && length > MEDIA_MAX_BYTES) {
     upstream.body?.cancel?.().catch(() => {});
+    res.setHeader('Cache-Control', 'no-store');
     res.status(413).json({ ok: false, error: { message: 'Asset too large to proxy', status: 413 } });
     return;
   }
@@ -246,7 +323,8 @@ app.get('/media', mediaThrottle, async (req, res) => {
     const value = upstream.headers.get(header);
     if (value) res.setHeader(header, value);
   }
-  // Steam assets are immutable per URL, so let browsers keep them.
+  // Steam assets are immutable per URL, so let browsers keep them — but only
+  // now that this is known to be the asset rather than an error page.
   res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 

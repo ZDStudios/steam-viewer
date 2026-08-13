@@ -2816,3 +2816,44 @@ a.chip:hover {
     margin-left: 0;
   }
 }
+
+/* =====================================================================
+   Assets that could not be found anywhere
+   =====================================================================
+   Every host has been tried and so has the relay. Left alone, the browser
+   shows its own broken-image glyph — or, with the src removed, the alt text
+   sitting bare on the page, which reads as the layout falling apart rather
+   than one picture being unavailable. A plain tile is honest and quiet.
+   ===================================================================== */
+
+img.is-missing {
+  /* The element keeps its box so nothing reflows around the gap. */
+  min-height: 100%;
+  min-width: 100%;
+  background: repeating-linear-gradient(135deg, #16202d 0 10px, #1a2634 10px 20px);
+  /* Hides the alt text, which the browser would otherwise render in its own
+     default type at whatever size it likes. */
+  color: transparent;
+  font-size: 0;
+}
+.has-missing-image {
+  position: relative;
+  background: repeating-linear-gradient(135deg, #16202d 0 10px, #1a2634 10px 20px);
+}
+.has-missing-image::after {
+  content: 'no image';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: rgba(199, 213, 224, 0.4);
+  pointer-events: none;
+}
+/* These already draw their own titled placeholder underneath. */
+.pcard .has-missing-image::after,
+.installed__art.has-missing-image::after {
+  content: none;
+}
